@@ -1,3 +1,27 @@
+**Ubuntu 24.04 automated installer (recommended)**
+
+For Ubuntu 24.04 systems, we provide an automated installer script that sets up PyPy2, builds a local OpenSSL 1.1, and configures p2pool with systemd integration. This is the easiest and most reliable method for modern Ubuntu systems.
+
+Quick start:
+
+```bash
+sudo ./contrib/install_ubuntu_24.04_py2_pypy.sh --user USERNAME \
+  --rpc-host BITCOIND_HOST --rpc-port 8332 \
+  --rpc-user RPCUSER --rpc-pass RPCPASS \
+  --address YOUR_PAYOUT_ADDRESS
+```
+
+The installer automatically:
+- Downloads and installs PyPy2 runtime
+- Builds OpenSSL 1.1 locally for compatibility
+- Installs all Python dependencies
+- Creates systemd service and wrapper script
+- Configures chrony (time sync), logrotate, and disk-space monitoring
+
+For detailed instructions, troubleshooting, and manual setup steps, see `INSTALL_UBUNTU_24.04_PY2_PYPY.md`.
+
+---
+
 **P2pool installation with pypy -- Windows**
 
 
