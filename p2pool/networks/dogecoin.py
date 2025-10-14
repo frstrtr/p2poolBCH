@@ -17,7 +17,7 @@ PREFIX = 'D0D3D4D541C11DD9'.decode('hex')
 P2P_PORT = 8555
 MIN_TARGET = 0
 MAX_TARGET = 2**256//2**20 - 1
-PERSIST = True
+PERSIST = False
 WORKER_PORT = 9555
 BOOTSTRAP_ADDRS = [
         'p2pool.org',
