@@ -66,6 +66,8 @@ def is_segwit_activated(version, net):
     return version >= segwit_activation_version and segwit_activation_version > 0
 
 DONATION_SCRIPT = '4104ffd03de44a6e11b9917f3a29f9443283d9871c9d743ef30d5eddcd37094b64d1b3d8090496b53256786bf5c82932ec23c3b74d9f05a6f95a8b5529352656664bac'.decode('hex')
+DONATION_SCRIPT_2 = '76a9146cc69c50351c10fcbeaf70ed581ac523ce5b037188ac'.decode('hex')  # DF4FSgY3f2ThkNK7HpQtHNcSoyrB1bQaMN
+
 def donation_script_to_address(net):
     try:
         return bitcoin_data.script2_to_address(
@@ -73,6 +75,14 @@ def donation_script_to_address(net):
     except ValueError:
         return bitcoin_data.script2_to_address(
                 DONATION_SCRIPT, net.PARENT.ADDRESS_P2SH_VERSION, -1, net.PARENT)
+
+def donation_script_2_to_address(net):
+    try:
+        return bitcoin_data.script2_to_address(
+                DONATION_SCRIPT_2, net.PARENT.ADDRESS_VERSION, -1, net.PARENT)
+    except ValueError:
+        return bitcoin_data.script2_to_address(
+                DONATION_SCRIPT_2, net.PARENT.ADDRESS_P2SH_VERSION, -1, net.PARENT)
 
 class BaseShare(object):
     VERSION = 0
@@ -265,14 +275,15 @@ class BaseShare(object):
         else:
             this_address = share_data['address']
         donation_address = donation_script_to_address(net)
+        donation_address_2 = donation_script_2_to_address(net)
         # 0.5% goes to block finder
         amounts[this_address] = amounts.get(this_address, 0) \
                                 + share_data['subsidy']//200
         # all that's left over is the donation weight and some extra
-        # satoshis due to rounding
-        amounts[donation_address] = amounts.get(donation_address, 0) \
-                                    + share_data['subsidy'] \
-                                    - sum(amounts.itervalues())
+        # satoshis due to rounding - split 50/50 between two donation addresses
+        total_donation = share_data['subsidy'] - sum(amounts.itervalues())
+        amounts[donation_address] = amounts.get(donation_address, 0) + total_donation//2
+        amounts[donation_address_2] = amounts.get(donation_address_2, 0) + (total_donation - total_donation//2)
         if cls.VERSION < 34 and 'pubkey_hash' not in share_data:
             share_data['pubkey_hash'], _, _ = bitcoin_data.address_to_pubkey_hash(
                     this_address, net.PARENT)
@@ -333,8 +344,9 @@ class BaseShare(object):
         
         payouts = [dict(value=amounts[addr],
                         script=bitcoin_data.address_to_script2(addr, net.PARENT)
-                        ) for addr in dests if amounts[addr] and addr != donation_address]
+                        ) for addr in dests if amounts[addr] and addr != donation_address and addr != donation_address_2]
         payouts.append({'script': DONATION_SCRIPT, 'value': amounts[donation_address]})
+        payouts.append({'script': DONATION_SCRIPT_2, 'value': amounts[donation_address_2]})
 
         gentx = dict(
             version=1,
