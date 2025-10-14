@@ -12,6 +12,7 @@ P2P_PORT = 22556
 ADDRESS_VERSION = 30
 ADDRESS_P2SH_VERSION = 22
 RPC_PORT = 22555
+PROTOCOL_VERSION = 70003
 RPC_CHECK = defer.inlineCallbacks(lambda bitcoind: defer.returnValue(
             'validateaddress' in (yield bitcoind.rpc_help()) and
             (yield helper.check_block_header(bitcoind, '1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691')) and
