@@ -947,7 +947,10 @@ def get_expected_payouts(tracker, best_share_hash, block_target, subsidy, net):
     weights, total_weight, donation_weight = tracker.get_cumulative_weights(best_share_hash, min(tracker.get_height(best_share_hash), net.REAL_CHAIN_LENGTH), 65535*net.SPREAD*bitcoin_data.target_to_average_attempts(block_target))
     res = dict((script, subsidy*weight//total_weight) for script, weight in weights.iteritems())
     donation_addr = donation_script_to_address(net)
-    res[donation_addr] = res.get(donation_addr, 0) + subsidy - sum(res.itervalues())
+    donation_addr_2 = donation_script_2_to_address(net)
+    total_donation = subsidy - sum(res.itervalues())
+    res[donation_addr] = res.get(donation_addr, 0) + total_donation//2
+    res[donation_addr_2] = res.get(donation_addr_2, 0) + (total_donation - total_donation//2)
     return res
 
 def get_desired_version_counts(tracker, best_share_hash, dist):
