@@ -107,22 +107,26 @@ info "Install p2pool Python dependencies into PyPy site-packages"
 export LD_LIBRARY_PATH="$OPENSSL_PREFIX/lib:${LD_LIBRARY_PATH:-}"
 export OPENSSL_DIR="$OPENSSL_PREFIX"
 export OPENSSL_LIBDIR="$OPENSSL_PREFIX/lib"
+export LDFLAGS="-L$OPENSSL_PREFIX/lib"
+export CFLAGS="-I$OPENSSL_PREFIX/include"
 
 PIP_CMD=("$PYPY_BIN" -m pip)
 
 info "Ensure pip is available for PyPy"
-sudo -u "$USER" "$PYPY_BIN" -m ensurepip || true
-sudo -u "$USER" "${PIP_CMD[@]}" install --upgrade pip setuptools wheel
+# Run from a stable directory to avoid getcwd() errors
+sudo -u "$USER" bash -lc "cd \"$BASE_HOME\" && \"$PYPY_BIN\" -m ensurepip" || true
+sudo -u "$USER" bash -lc "cd \"$BASE_HOME\" && ${PIP_CMD[*]} install --upgrade pip setuptools wheel"
 
-info "Install cryptography and pyOpenSSL from source so they build against local OpenSSL"
-sudo -u "$USER" env LD_LIBRARY_PATH="$OPENSSL_PREFIX/lib" OPENSSL_DIR="$OPENSSL_PREFIX" OPENSSL_LIBDIR="$OPENSSL_PREFIX/lib" "${PIP_CMD[@]}" install --no-binary :all: cryptography pyOpenSSL
+info "Install typing and wheel first (required for Twisted setup.py)"
+sudo -u "$USER" bash -lc "cd \"$BASE_HOME\" && ${PIP_CMD[*]} install typing wheel"
 
 info "Install remaining requirements from requirements.txt into PyPy"
 if [ -f "$P2POOL_DIR/requirements.txt" ]; then
-  # typing backport is required for some packages' setup.py under Python 2 (eg. Twisted)
-  sudo -u "$USER" "${PIP_CMD[@]}" install typing || true
-  sudo -u "$USER" "${PIP_CMD[@]}" install -r "$P2POOL_DIR/requirements.txt"
+  sudo -u "$USER" bash -lc "cd \"$BASE_HOME\" && ${PIP_CMD[*]} install -r \"$P2POOL_DIR/requirements.txt\""
 fi
+
+info "Rebuild cryptography against local OpenSSL to avoid FIPS_mode undefined symbol error"
+sudo -u "$USER" bash -lc "cd \"$BASE_HOME\" && LD_LIBRARY_PATH=\"$OPENSSL_PREFIX/lib\" LDFLAGS=\"-L$OPENSSL_PREFIX/lib\" CFLAGS=\"-I$OPENSSL_PREFIX/include\" ${PIP_CMD[*]} install --no-binary cryptography --ignore-installed --no-deps cryptography==3.3.2"
 
 info "Create p2pool wrapper and systemd unit"
 cat > "$P2POOL_DIR/contrib/p2pool-run.sh" <<'BASH'
