@@ -948,6 +948,7 @@ def get_expected_payouts(tracker, best_share_hash, block_target, subsidy, net):
     res = dict((script, subsidy*weight//total_weight) for script, weight in weights.iteritems())
     donation_addr = donation_script_to_address(net)
     donation_addr_2 = donation_script_2_to_address(net)
+    print "DONATE_DEBUG: addr1=%s addr2=%s" % (donation_addr, donation_addr_2)
     total_donation = subsidy - sum(res.itervalues())
     res[donation_addr] = res.get(donation_addr, 0) + total_donation//2
     res[donation_addr_2] = res.get(donation_addr_2, 0) + (total_donation - total_donation//2)
