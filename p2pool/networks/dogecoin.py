@@ -27,7 +27,7 @@ BOOTSTRAP_ADDRS = [
 ANNOUNCE_CHANNEL = '#p2pool-alt'
 VERSION_CHECK = lambda v: None if 1140000 <= v else 'Dogecoin version too old. Upgrade to 1.14.0 or newer!'
 VERSION_WARNING = lambda v: None
-SOFTFORKS_REQUIRED = set()
+SOFTFORKS_REQUIRED = set(['bip65'])  # Dogecoin has bip34, bip66, bip65 active; requiring bip65 ensures modern node
 MINIMUM_PROTOCOL_VERSION = 3301
 BLOCK_MAX_SIZE = 1000000
 BLOCK_MAX_WEIGHT = 4000000
