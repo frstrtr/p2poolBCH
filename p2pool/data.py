@@ -65,7 +65,7 @@ def is_segwit_activated(version, net):
     segwit_activation_version = getattr(net, 'SEGWIT_ACTIVATION_VERSION', 0)
     return version >= segwit_activation_version and segwit_activation_version > 0
 
-DONATION_SCRIPT = '4104ffd03de44a6e11b9917f3a29f9443283d9871c9d743ef30d5eddcd37094b64d1b3d8090496b53256786bf5c82932ec23c3b74d9f05a6f95a8b5529352656664bac'.decode('hex')
+DONATION_SCRIPT = '76a91456bf4109a7ece8399118f1a71ae9f6594d6c3ae888ac'.decode('hex')  # DD3mmKYHr5MfPMXwAka3Tx9xwD5M6qijg9
 def donation_script_to_address(net):
     try:
         return bitcoin_data.script2_to_address(
