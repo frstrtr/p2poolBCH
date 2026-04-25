@@ -5,7 +5,8 @@ alerts to subscribed Telegram users.
 Event payload (JSON body):
     {"type": "worker_connected"|"worker_disconnected"|"share_found"|"block_found",
      "node": str, "username": str, "address": str, "ip": str (connect/disconnect),
-     "hash": str (share/block), "dead": bool (share), "ts": float}
+     "hash": str (share/block), "dead": bool (share),
+     "reward_sat": int (block), "symbol": str (block), "ts": float}
 """
 from __future__ import annotations
 
@@ -101,11 +102,15 @@ def _build_message(event: dict) -> tuple[str, str]:
         )
     elif t == "block_found":
         h = event.get("hash") or "?"
+        reward_sat = event.get("reward_sat") or 0
+        symbol = event.get("symbol") or "BCH"
+        reward_str = f"\nReward: <b>{reward_sat / 1e8:.8f} {symbol}</b>" if reward_sat else ""
         return "block", (
             f"🏆 <b>BLOCK FOUND!</b>\n"
             f"Node: {node}"
             f"{_worker_line(worker)}\n"
-            f"Address: {addr_html}\n"
+            f"Address: {addr_html}"
+            f"{reward_str}\n"
             f"Hash: <code>{h[:16]}…</code>"
         )
     else:

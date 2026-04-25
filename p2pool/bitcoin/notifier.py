@@ -10,7 +10,7 @@ Wire format (POST body, JSON):
     {"type": "share_found",  "node": ..., "username": ..., "address": ...,
      "hash": "abcd1234...", "dead": false, "ts": ...}
     {"type": "block_found",  "node": ..., "username": ..., "address": ...,
-     "hash": "abcd1234...", "ts": ...}
+     "hash": "abcd1234...", "reward_sat": 625000000, "symbol": "BCH", "ts": ...}
 """
 import json
 import time
@@ -52,6 +52,7 @@ class LocalEventPusher(object):
         self._push({'type': 'share_found', 'username': username,
                     'address': address, 'hash': share_hash, 'dead': dead})
 
-    def on_block_found(self, username, address, block_hash):
+    def on_block_found(self, username, address, block_hash, subsidy_sat=0, symbol='BCH'):
         self._push({'type': 'block_found', 'username': username,
-                    'address': address, 'hash': block_hash})
+                    'address': address, 'hash': block_hash,
+                    'reward_sat': subsidy_sat, 'symbol': symbol})

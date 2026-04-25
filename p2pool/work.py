@@ -465,7 +465,11 @@ class WorkerBridge(worker_interface.WorkerBridge):
             username, address, _, _ = self.get_user_details(username)
             if pow_hash <= header['bits'].target:
                 try:
-                    self.block_found.happened(raw_username, address, '%064x' % (header_hash,))
+                    self.block_found.happened(
+                        raw_username, address, '%064x' % (header_hash,),
+                        self.current_work.value['subsidy'],
+                        self.node.net.PARENT.SYMBOL,
+                    )
                 except:
                     log.err(None, 'Error firing block_found event:')
             assert header['previous_block'] == ba['previous_block']
