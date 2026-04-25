@@ -9,10 +9,10 @@ notifications to subscribed miners when pool events occur.
 
 | Event | Description |
 |---|---|
-| 🟢 **Worker connected** | A miner authenticated via Stratum |
-| 🔴 **Worker disconnected** | A miner's connection was closed |
-| 🔵 **Share found** | A valid share was submitted |
-| 🏆 **Block found** | A block was solved by the pool |
+| 🟢 **Worker connected** | A miner authenticated via Stratum — shows worker name and IP |
+| 🔴 **Worker disconnected** | A miner's connection was closed — shows worker name |
+| 📦 **Share found** | A valid share was submitted — shows worker name and share hash |
+| 🏆 **Block found** | A block was solved by the pool — shows worker name, reward amount, and a clickable link to the block explorer |
 
 Alerts are matched by **BCH address** — each user registers their address
 and receives only events for that address.

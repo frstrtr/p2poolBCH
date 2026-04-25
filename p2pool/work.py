@@ -469,6 +469,7 @@ class WorkerBridge(worker_interface.WorkerBridge):
                         raw_username, address, '%064x' % (header_hash,),
                         self.current_work.value['subsidy'],
                         self.node.net.PARENT.SYMBOL,
+                        self.node.net.PARENT.BLOCK_EXPLORER_URL_PREFIX,
                     )
                 except:
                     log.err(None, 'Error firing block_found event:')

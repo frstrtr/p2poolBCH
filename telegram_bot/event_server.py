@@ -6,7 +6,8 @@ Event payload (JSON body):
     {"type": "worker_connected"|"worker_disconnected"|"share_found"|"block_found",
      "node": str, "username": str, "address": str, "ip": str (connect/disconnect),
      "hash": str (share/block), "dead": bool (share),
-     "reward_sat": int (block), "symbol": str (block), "ts": float}
+     "reward_sat": int (block), "symbol": str (block),
+     "explorer_url": str (block, full URL or empty), "ts": float}
 """
 from __future__ import annotations
 
@@ -104,14 +105,19 @@ def _build_message(event: dict) -> tuple[str, str]:
         h = event.get("hash") or "?"
         reward_sat = event.get("reward_sat") or 0
         symbol = event.get("symbol") or "BCH"
+        explorer_url = event.get("explorer_url") or ""
         reward_str = f"\nReward: <b>{reward_sat / 1e8:.8f} {symbol}</b>" if reward_sat else ""
+        if explorer_url:
+            hash_str = f"\nBlock: <a href=\"{explorer_url}\">{h[:16]}…</a>"
+        else:
+            hash_str = f"\nHash: <code>{h[:16]}…</code>"
         return "block", (
             f"🏆 <b>BLOCK FOUND!</b>\n"
             f"Node: {node}"
             f"{_worker_line(worker)}\n"
             f"Address: {addr_html}"
-            f"{reward_str}\n"
-            f"Hash: <code>{h[:16]}…</code>"
+            f"{reward_str}"
+            f"{hash_str}"
         )
     else:
         return "", f"[unknown event type: {t}]"
