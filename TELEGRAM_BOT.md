@@ -118,6 +118,7 @@ pypy run_p2pool.py --net bitcoincash \
 | `P2POOL_API_URL` | `http://127.0.0.1:9348` | no | p2pool web API base URL |
 | `SUBSCRIPTIONS_FILE` | `telegram_bot/subscriptions.json` | no | Path to subscription store |
 | `BROADCAST_CHANNEL_ID` | (empty) | no | Channel ID for broadcast alerts; bot must be admin |
+| `ONE_SUB_PER_ADDRESS` | `false` | no | When `true`, each BCH address may only be claimed by one subscriber |
 
 ---
 
@@ -185,6 +186,52 @@ bot just idles (no events arrive) until p2pool is running.
 
 ---
 
+## Edge cases and behaviour notes
+
+### Miner not currently connected
+A subscriber can set any BCH address. If no miner with that address ever
+connects to this node, the subscriber is registered but simply receives no
+alerts. There is no error or warning — the address is stored and will match
+events whenever that miner does connect.
+
+### Worker name in alerts
+The Stratum authorize string has the form `address[._]workername` (e.g.
+`bitcoincash:qpabc.rig1`). The **Worker** line in alerts shows only the
+`workername` suffix and is omitted entirely when no suffix is set.
+
+Stratum difficulty hints (`+1000`, `/2`, etc.) are stripped from the worker
+name before display — `bitcoincash:qpabc.rig1+1000` shows `Worker: rig1`.
+
+### Multiple workers sharing one address
+If a miner runs several rigs all authenticating with the same BCH address
+(`addr.rig1`, `addr.rig2`, …), the subscriber for that address receives
+alerts for all of them. The **Worker** line identifies which rig triggered
+each alert.
+
+### Address format must match
+The bot matches events to subscribers by the **BCH payout address** exactly
+(case-insensitive). Use cashaddr format (`bitcoincash:q…`) consistently:
+
+- p2pool internally normalises addresses to cashaddr — use the same format
+  when subscribing.
+- A legacy `1…` address and its cashaddr equivalent are *not* recognised as
+  the same by the bot. If in doubt, check what p2pool logs when your miner
+  connects.
+
+### Invalid miner address fallback
+If a miner authorizes with an address that p2pool cannot parse (e.g., wrong
+network, malformed), p2pool substitutes the pool operator's payout address.
+Events for such miners are attributed to the operator's address, not the
+miner's claimed address.
+
+### `ONE_SUB_PER_ADDRESS`
+By default multiple Telegram subscribers may register the same BCH address
+(useful for team monitoring). Set `ONE_SUB_PER_ADDRESS=true` to enforce one
+subscriber per address — a second user trying to claim an already-taken
+address is rejected with an error message in the bot.
+
+---
+
 ## Troubleshooting
 
 **Bot starts but sends no messages**
@@ -193,6 +240,15 @@ bot just idles (no events arrive) until p2pool is running.
   (default both `9349`).
 - Make sure you `/start`-ed the bot and set a mining address that matches
   the address p2pool sees in Stratum `authorize`.
+
+**Subscribed but no alerts when miner connects**
+- The address stored in the bot must exactly match what p2pool reports.
+  Use cashaddr format (`bitcoincash:q…`). Verify by watching the p2pool
+  console when your miner authenticates — it logs the parsed address.
+- Confirm the relevant alert toggle (e.g. **Connect**) is **ON** in the bot
+  menu.
+- If your mining software appends a difficulty hint (e.g. `addr.rig1+1000`),
+  the bot still matches on the base address — hints are stripped.
 
 **`Telegram bot started` not in p2pool log**
 - The venv check in `p2pool-run.sh` requires `bot-venv/bin/python3` to be

@@ -4,7 +4,6 @@ Alert delivery helpers.
 from __future__ import annotations
 
 from telegram import Bot
-from telegram.error import TelegramError
 
 from .config import BROADCAST_CHANNEL_ID
 
@@ -17,7 +16,7 @@ async def send_alert(bot: Bot, chat_id: int | str, text: str) -> None:
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
-    except TelegramError as exc:
+    except Exception as exc:
         print(f"[notifier] send_alert({chat_id}) failed: {exc}")
 
 
@@ -31,5 +30,5 @@ async def broadcast_to_channel(bot: Bot, text: str) -> None:
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
-    except TelegramError as exc:
+    except Exception as exc:
         print(f"[notifier] broadcast_to_channel failed: {exc}")

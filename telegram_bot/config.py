@@ -21,3 +21,8 @@ SUBSCRIPTIONS_FILE: str = os.environ.get(
 # Optional: a Telegram channel where every event is broadcast regardless of
 # per-user subscriptions (leave empty to disable).
 BROADCAST_CHANNEL_ID: str = os.environ.get("BROADCAST_CHANNEL_ID", "")
+
+# When True, each BCH address may only be claimed by one subscriber.
+# The second user to attempt claiming that address is rejected.
+# Default: False (multiple subscribers per address are allowed).
+ONE_SUB_PER_ADDRESS: bool = os.environ.get("ONE_SUB_PER_ADDRESS", "").lower() in ("1", "true", "yes")

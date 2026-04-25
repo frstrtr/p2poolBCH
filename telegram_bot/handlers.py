@@ -157,6 +157,18 @@ async def recv_address(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return AWAIT_ADDR
 
     chat_id = update.effective_chat.id
+
+    from .config import ONE_SUB_PER_ADDRESS
+    if ONE_SUB_PER_ADDRESS:
+        for other_id, other_sub in subscriptions.all_subscriptions():
+            if str(other_id) != str(chat_id) and (other_sub.get("addr") or "").lower() == addr.lower():
+                await update.message.reply_text(
+                    "❌ That address is already registered by another subscriber.\n"
+                    "Each address can only have one subscriber on this node.",
+                    parse_mode="HTML",
+                )
+                return AWAIT_ADDR
+
     subscriptions.upsert(chat_id, {"addr": addr})
     await update.message.reply_text(
         f"✅ Address saved: <code>{addr}</code>",

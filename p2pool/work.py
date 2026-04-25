@@ -461,10 +461,11 @@ class WorkerBridge(worker_interface.WorkerBridge):
             except:
                 log.err(None, 'Error while processing potential block:')
             
+            raw_username = username
             username, address, _, _ = self.get_user_details(username)
             if pow_hash <= header['bits'].target:
                 try:
-                    self.block_found.happened(username, address, '%064x' % (header_hash,))
+                    self.block_found.happened(raw_username, address, '%064x' % (header_hash,))
                 except:
                     log.err(None, 'Error firing block_found event:')
             assert header['previous_block'] == ba['previous_block']
@@ -549,7 +550,7 @@ class WorkerBridge(worker_interface.WorkerBridge):
                 
                 self.share_received.happened(bitcoin_data.target_to_average_attempts(share.target), not on_time, share.hash)
                 try:
-                    self.share_found.happened(username, address, p2pool_data.format_hash(share.hash), not on_time)
+                    self.share_found.happened(raw_username, address, p2pool_data.format_hash(share.hash), not on_time)
                 except:
                     log.err(None, 'Error firing share_found event:')
 

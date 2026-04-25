@@ -48,7 +48,7 @@ class StratumRPCMiningProvider(object):
         self.user, self.address, self.desired_share_target, self.desired_pseudoshare_target = self.wb.get_user_details(username)
         try:
             peer_ip = self.transport.getPeer().host
-            self.wb.worker_connected.happened(self.user, self.address, peer_ip)
+            self.wb.worker_connected.happened(self.username, self.address, peer_ip)
         except:
             pass
         reactor.callLater(0, self._send_work)
@@ -169,7 +169,7 @@ class StratumProtocol(jsonrpc.LineBasedPeer):
         if getattr(svc, 'address', None) is not None:
             try:
                 peer_ip = self.transport.getPeer().host
-                svc.wb.worker_disconnected.happened(svc.user, svc.address, peer_ip)
+                svc.wb.worker_disconnected.happened(svc.username, svc.address, peer_ip)
             except:
                 pass
         svc.close()
