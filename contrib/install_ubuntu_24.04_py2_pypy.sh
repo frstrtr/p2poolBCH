@@ -1,62 +1,189 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Automated installer for Ubuntu 24.04 to run p2pool under PyPy2 with a local OpenSSL 1.1
-# This script reproduces the manual steps used to get p2pool working on a modern Ubuntu
-# where system OpenSSL/cryptography wheels are incompatible with PyPy2 binary extensions.
+# Interactive installer for p2pool-BCH on Ubuntu 24.04 — PyPy2 + local OpenSSL 1.1.
+# Run as root (sudo). All options can be supplied as CLI args or entered interactively.
+#
+# Usage: sudo ./install_ubuntu_24.04_py2_pypy.sh [OPTIONS]
+#
+# Options:
+#   --user USER          Linux user to install under          (default: $SUDO_USER or ubuntu)
+#   --network NET        p2pool network name                  (default: bitcoincash)
+#   --rpc-host HOST      bitcoind RPC host                    (default: 127.0.0.1)
+#   --rpc-port PORT      bitcoind RPC port                    (default: 8332)
+#   --rpc-user RPCUSER   bitcoind RPC username                (default: bitcoinrpc)
+#   --rpc-pass RPCPASS   bitcoind RPC password                (no default)
+#   --address ADDR       payout BCH address or "dynamic"      (default: dynamic)
+#   --bot-token TOKEN    Telegram bot token; enables the bot  (default: skip bot setup)
+#   --node-name NAME     label shown in bot alert messages    (default: system hostname)
+#   --bootstrap NODE     extra p2pool peer ADDR[:PORT];
+#                        may be repeated                      (default: none)
+#   --yes / -y           non-interactive; accept all defaults
+#   --help               show this help
 
-# Usage: sudo ./install_ubuntu_24.04_py2_pypy.sh --user USERNAME --rpc-host HOST --rpc-port PORT --rpc-user USER --rpc-pass PASS --address ADDRESS
-
-USER=${USER:-user0}
+# ── defaults ──────────────────────────────────────────────────────────────────
+INSTALL_USER=""
+NETWORK=""
 RPC_HOST=""
 RPC_PORT=""
 RPC_USER=""
 RPC_PASS=""
 PAYOUT_ADDRESS=""
+BOT_TOKEN=""
+NODE_NAME=""
+BOOTSTRAP_NODES=()
+NON_INTERACTIVE=0
 
-# provisional BASE_HOME so script doesn't fail under 'set -u' before args are parsed
-BASE_HOME="/home/${USER}"
-P2POOL_DIR="$BASE_HOME/Github/p2pool"
-OPENSSL_PREFIX="$BASE_HOME/openssl-1.1"
-PYPY_VERSION="pypy2.7-v7.3.20-linux64"
-PYPY_BIN="$BASE_HOME/$PYPY_VERSION/bin/pypy"
-
+# ── helpers ───────────────────────────────────────────────────────────────────
 function info { echo "[INFO] $*"; }
-function die { echo "[ERROR] $*" >&2; exit 1; }
+function die  { echo "[ERROR] $*" >&2; exit 1; }
+function hr   { echo "────────────────────────────────────────────────────────────────────────"; }
 
-if [ "$(id -u)" -ne 0 ]; then
-  die "This script must be run as root (it installs packages and creates systemd units). Use sudo." 
-fi
+# prompt VARNAME "Question" "default"
+# Reads interactively if the variable is not already set; respects --yes.
+function prompt {
+    local -n _pref="$1"
+    local msg="$2" default="$3"
+    [[ -n "${_pref}" ]] && return
+    if [[ "$NON_INTERACTIVE" -eq 1 ]]; then _pref="$default"; return; fi
+    local _reply
+    read -r -p "  ${msg} [${default}]: " _reply </dev/tty || { _pref="$default"; return; }
+    _pref="${_reply:-$default}"
+}
 
+# prompt_secret VARNAME "Question"
+# Reads without echo; skips if already set or --yes.
+function prompt_secret {
+    local -n _sref="$1"
+    local msg="$2"
+    [[ -n "${_sref}" ]] && return
+    if [[ "$NON_INTERACTIVE" -eq 1 ]]; then return; fi
+    local _reply
+    read -r -s -p "  ${msg}: " _reply </dev/tty || true; echo
+    _sref="${_reply}"
+}
 
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --user) USER="$2"; shift 2;;
-    --rpc-host) RPC_HOST="$2"; shift 2;;
-    --rpc-port) RPC_PORT="$2"; shift 2;;
-    --rpc-user) RPC_USER="$2"; shift 2;;
-    --rpc-pass) RPC_PASS="$2"; shift 2;;
-    --address) PAYOUT_ADDRESS="$2"; shift 2;;
-    --help) echo "Usage: $0 --user USER --rpc-host HOST --rpc-port PORT --rpc-user USER --rpc-pass PASS --address ADDRESS"; exit 0;;
-    *) echo "Unknown arg: $1"; exit 1;;
-  esac
+# ── argument parsing ──────────────────────────────────────────────────────────
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+        --user)         INSTALL_USER="$2"; shift 2;;
+        --network)      NETWORK="$2"; shift 2;;
+        --rpc-host)     RPC_HOST="$2"; shift 2;;
+        --rpc-port)     RPC_PORT="$2"; shift 2;;
+        --rpc-user)     RPC_USER="$2"; shift 2;;
+        --rpc-pass)     RPC_PASS="$2"; shift 2;;
+        --address)      PAYOUT_ADDRESS="$2"; shift 2;;
+        --bot-token)    BOT_TOKEN="$2"; shift 2;;
+        --node-name)    NODE_NAME="$2"; shift 2;;
+        --bootstrap)    BOOTSTRAP_NODES+=("$2"); shift 2;;
+        --yes|-y)       NON_INTERACTIVE=1; shift;;
+        --help|-h)
+            cat <<'HELP'
+Interactive installer for p2pool-BCH on Ubuntu 24.04 — PyPy2 + local OpenSSL 1.1.
+Run as root (sudo). All options can be supplied as CLI args or entered interactively.
+
+Usage: sudo ./install_ubuntu_24.04_py2_pypy.sh [OPTIONS]
+
+Options:
+  --user USER          Linux user to install under          (default: $SUDO_USER or ubuntu)
+  --network NET        p2pool network name                  (default: bitcoincash)
+  --rpc-host HOST      bitcoind RPC host                    (default: 127.0.0.1)
+  --rpc-port PORT      bitcoind RPC port                    (default: 8332)
+  --rpc-user RPCUSER   bitcoind RPC username                (default: bitcoinrpc)
+  --rpc-pass RPCPASS   bitcoind RPC password                (no default)
+  --address ADDR       payout BCH address or "dynamic"      (default: dynamic)
+  --bot-token TOKEN    Telegram bot token; enables the bot  (default: skip bot setup)
+  --node-name NAME     label shown in bot alert messages    (default: system hostname)
+  --bootstrap NODE     extra p2pool peer ADDR[:PORT];
+                       may be repeated                      (default: none)
+  --yes / -y           non-interactive; accept all defaults
+  --help               show this help
+HELP
+            exit 0;;
+        *) die "Unknown argument: $1";;
+    esac
 done
 
-# compute derived paths after parsing --user so sudo-wrapped invocations that pass --user work
+# ── root check ────────────────────────────────────────────────────────────────
+if [[ "$(id -u)" -ne 0 ]]; then
+    die "Run this script as root: sudo $0"
+fi
+
+# ── interactive prompts ───────────────────────────────────────────────────────
+hr
+echo "  p2pool-BCH installer — Ubuntu 24.04"
+hr
+prompt INSTALL_USER "Linux user to install under" "${SUDO_USER:-ubuntu}"
+prompt NETWORK      "p2pool network (bitcoincash / bitcoincash_testnet / bitcoin)" "bitcoincash"
+echo
+echo "  bitcoind / BCHN connection:"
+prompt     RPC_HOST "RPC host" "127.0.0.1"
+prompt     RPC_PORT "RPC port" "8332"
+prompt     RPC_USER "RPC username" "bitcoinrpc"
+prompt_secret RPC_PASS "RPC password (input hidden, leave empty to configure later)"
+echo
+echo "  p2pool payout address (BCH address, or 'dynamic' to pull one from bitcoind):"
+prompt PAYOUT_ADDRESS "Payout address" "dynamic"
+echo
+echo "  Telegram bot notifications (optional — press Enter to skip):"
+prompt_secret BOT_TOKEN "Bot token from @BotFather (empty = disable)"
+if [[ -n "$BOT_TOKEN" ]]; then
+    _hn="$(hostname -s 2>/dev/null || echo p2pool)"
+    prompt NODE_NAME "Node name shown in alerts" "$_hn"
+fi
+echo
+echo "  Extra p2pool bootstrap/peer nodes (optional):"
+echo "    (already supplied via --bootstrap flags: ${BOOTSTRAP_NODES[*]:-none})"
+if [[ "$NON_INTERACTIVE" -eq 0 ]] && [[ "${#BOOTSTRAP_NODES[@]}" -eq 0 ]]; then
+    _extra_node=""
+    read -r -p "  Add a peer ADDR[:PORT] (or Enter to skip): " _extra_node </dev/tty || true
+    [[ -n "$_extra_node" ]] && BOOTSTRAP_NODES+=("$_extra_node")
+fi
+
+# ── confirmation ──────────────────────────────────────────────────────────────
+hr
+echo "  Installation summary:"
+echo "    User:            $INSTALL_USER"
+echo "    Network:         $NETWORK"
+echo "    bitcoind RPC:    ${RPC_USER}@${RPC_HOST}:${RPC_PORT}"
+if [[ -n "$RPC_PASS" ]]; then
+    echo "    RPC password:    (set)"
+else
+    echo "    RPC password:    NOT SET — service will need editing before first start"
+fi
+echo "    Payout address:  $PAYOUT_ADDRESS"
+if [[ -n "$BOT_TOKEN" ]]; then
+    echo "    Telegram bot:    enabled — /etc/p2pool-bot.env will be written"
+    echo "    Node name:       ${NODE_NAME:-$(hostname -s 2>/dev/null || echo p2pool)}"
+else
+    echo "    Telegram bot:    disabled (no token provided)"
+fi
+[[ "${#BOOTSTRAP_NODES[@]}" -gt 0 ]] && echo "    Bootstrap nodes: ${BOOTSTRAP_NODES[*]}"
+hr
+
+if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
+    _confirm=""
+    read -r -p "  Proceed with installation? [Y/n]: " _confirm </dev/tty || true
+    case "${_confirm,,}" in
+        n|no) echo "Aborted."; exit 0;;
+    esac
+fi
+
+# ── derived paths (computed after collecting config) ──────────────────────────
+USER="$INSTALL_USER"
 BASE_HOME="/home/${USER}"
 P2POOL_DIR="$BASE_HOME/Github/p2pool"
 OPENSSL_PREFIX="$BASE_HOME/openssl-1.1"
 PYPY_VERSION="pypy2.7-v7.3.20-linux64"
 PYPY_BIN="$BASE_HOME/$PYPY_VERSION/bin/pypy"
 
-if [ ! -d "$BASE_HOME" ]; then
-  die "Home dir $BASE_HOME does not exist. Pass a correct --user or create the user first."
+if [[ ! -d "$BASE_HOME" ]]; then
+    die "Home directory $BASE_HOME does not exist. Create user '$USER' first."
 fi
 
 info "Updating package lists"
 apt-get update
 
 info "Install build and runtime dependencies"
-
 # We run Python package installs under the PyPy runtime (we use PyPy's pip).
 # Avoid installing system Python3 packages; only install the required build
 # toolchain and libraries needed to compile Python extensions and OpenSSL.
@@ -124,7 +251,20 @@ if [ -f "$P2POOL_DIR/requirements.txt" ]; then
   sudo -u "$USER" "${PIP_CMD[@]}" install -r "$P2POOL_DIR/requirements.txt"
 fi
 
-info "Create p2pool wrapper and systemd unit"
+info "Create Telegram bot Python 3 venv at $P2POOL_DIR/bot-venv"
+# Ubuntu 24.04 enforces PEP 668: pip install to system Python 3 is blocked.
+# We create a dedicated venv for the bot so its deps are isolated and the
+# path can be passed to p2pool via --bot-python.
+BOT_VENV="$P2POOL_DIR/bot-venv"
+if [ ! -x "$BOT_VENV/bin/python3" ]; then
+  apt-get install -y --no-install-recommends python3 python3-venv
+  sudo -u "$USER" python3 -m venv "$BOT_VENV"
+fi
+sudo -u "$USER" "$BOT_VENV/bin/pip" install --upgrade pip
+sudo -u "$USER" "$BOT_VENV/bin/pip" install -r "$P2POOL_DIR/telegram_bot/requirements.txt"
+info "Bot venv ready: $BOT_VENV/bin/python3"
+
+info "Create p2pool wrapper script"
 cat > "$P2POOL_DIR/contrib/p2pool-run.sh" <<'BASH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -133,51 +273,66 @@ OPENSSL_DIR="$BASE_DIR/openssl-1.1"
 PYPY_BIN="$BASE_DIR/PYPY_PLACEHOLDER/bin/pypy"
 P2POOL_DIR="$BASE_DIR/Github/p2pool"
 LOGFILE="$BASE_DIR/p2pool.log"
+BOT_VENV="$P2POOL_DIR/bot-venv"
+BOT_ENV_FILE="/etc/p2pool-bot.env"
+BOT_NODE_NAME="NODE_PLACEHOLDER"
 export LD_LIBRARY_PATH="$OPENSSL_DIR/lib:${LD_LIBRARY_PATH:-}"
 export OPENSSL_DIR="$OPENSSL_DIR"
 export OPENSSL_LIBDIR="$OPENSSL_DIR/lib"
 cd "$P2POOL_DIR"
-exec "$PYPY_BIN" run_p2pool.py --logfile "$LOGFILE" "$@"
+BOT_ARGS=()
+if [ -x "$BOT_VENV/bin/python3" ] && [ -f "$BOT_ENV_FILE" ]; then
+  BOT_ARGS=(--run-bot --bot-python "$BOT_VENV/bin/python3" --bot-env-file "$BOT_ENV_FILE" --node-name "$BOT_NODE_NAME")
+fi
+exec "$PYPY_BIN" run_p2pool.py --logfile "$LOGFILE" "${BOT_ARGS[@]}" "$@"
 BASH
 
 sed -i "s|USER_PLACEHOLDER|$USER|g" "$P2POOL_DIR/contrib/p2pool-run.sh"
 sed -i "s|PYPY_PLACEHOLDER|$PYPY_VERSION|g" "$P2POOL_DIR/contrib/p2pool-run.sh"
+_effective_node_name="${NODE_NAME:-$(hostname -s 2>/dev/null || echo p2pool)}"
+sed -i "s|NODE_PLACEHOLDER|${_effective_node_name}|g" "$P2POOL_DIR/contrib/p2pool-run.sh"
 chmod +x "$P2POOL_DIR/contrib/p2pool-run.sh"
 
-cat > "$P2POOL_DIR/contrib/p2pool.service" <<'UNIT'
+info "Create systemd service unit"
+# Build ExecStart from collected configuration
+_ADDR_ARGS="--address $PAYOUT_ADDRESS"
+[[ "$PAYOUT_ADDRESS" == "dynamic" ]] && _ADDR_ARGS="$_ADDR_ARGS --numaddresses 2"
+_RPC_ARGS=""
+[[ -n "$RPC_PASS" ]] && _RPC_ARGS=" $RPC_USER $RPC_PASS --bitcoind-address $RPC_HOST --bitcoind-rpc-port $RPC_PORT"
+_BOOTSTRAP_ARGS=""
+for _bn in "${BOOTSTRAP_NODES[@]+${BOOTSTRAP_NODES[@]}}"; do _BOOTSTRAP_ARGS="$_BOOTSTRAP_ARGS -n $_bn"; done
+_EXECSTART="$P2POOL_DIR/contrib/p2pool-run.sh --net $NETWORK $_ADDR_ARGS${_BOOTSTRAP_ARGS}${_RPC_ARGS}"
+
+cat > "$P2POOL_DIR/contrib/p2pool.service" <<UNIT
 [Unit]
 Description=p2pool (local wrapper)
 After=network.target bitcoind.service
 
 [Service]
 Type=simple
-User=USER_PLACEHOLDER
-Group=USER_PLACEHOLDER
-WorkingDirectory=/home/USER_PLACEHOLDER/Github/p2pool
-Environment=LD_LIBRARY_PATH=/home/USER_PLACEHOLDER/openssl-1.1/lib
-ExecStart=/home/USER_PLACEHOLDER/Github/p2pool/contrib/p2pool-run.sh --net bitcoincash --address dynamic --numaddresses 2 p2poolrpcuser RPCPASSWORD_PLACEHOLDER
+User=$USER
+Group=$USER
+WorkingDirectory=$P2POOL_DIR
+Environment=LD_LIBRARY_PATH=$OPENSSL_PREFIX/lib
+ExecStart=$_EXECSTART
 Restart=on-failure
 RestartSec=5
-StandardOutput=append:/home/USER_PLACEHOLDER/p2pool.out
-StandardError=append:/home/USER_PLACEHOLDER/p2pool.out
+StandardOutput=append:$BASE_HOME/p2pool.out
+StandardError=append:$BASE_HOME/p2pool.out
 
 [Install]
 WantedBy=multi-user.target
 UNIT
-
-sed -i "s|USER_PLACEHOLDER|$USER|g" "$P2POOL_DIR/contrib/p2pool.service"
 chmod 644 "$P2POOL_DIR/contrib/p2pool.service"
 
-info "Install systemd unit (the service uses placeholders for rpc creds; edit or create a drop-in to supply real rpcuser/rpcpassword)"
+info "Install and enable systemd service"
 cp "$P2POOL_DIR/contrib/p2pool.service" /etc/systemd/system/p2pool.service
 systemctl daemon-reload
 systemctl enable p2pool.service || true
 
-# Install and enable time sync (chrony)
 info "Enable time sync with chrony"
 systemctl enable --now chrony || true
 
-# Create logrotate config for p2pool logs
 info "Installing logrotate config for p2pool logs"
 cat > /etc/logrotate.d/p2pool <<'LR'
 /home/USER_PLACEHOLDER/p2pool.out /home/USER_PLACEHOLDER/p2pool.log {
@@ -192,7 +347,6 @@ cat > /etc/logrotate.d/p2pool <<'LR'
 LR
 sed -i "s|USER_PLACEHOLDER|$USER|g" /etc/logrotate.d/p2pool
 
-# Create disk-space alert script and systemd timer
 info "Installing disk-space alert service and timer"
 cat > /usr/local/bin/p2pool-disk-alert.sh <<'SH'
 #!/usr/bin/env bash
@@ -212,7 +366,7 @@ Description=p2pool disk usage alert
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/p2pool-disk-alert.sh
-Unit
+UNIT
 
 cat > /etc/systemd/system/p2pool-disk-alert.timer <<'UNIT'
 [Unit]
@@ -229,24 +383,67 @@ UNIT
 systemctl daemon-reload || true
 systemctl enable --now p2pool-disk-alert.timer || true
 
-if [ -n "$RPC_HOST" ] && [ -n "$RPC_PORT" ] && [ -n "$RPC_USER" ] && [ -n "$RPC_PASS" ] && [ -n "$PAYOUT_ADDRESS" ]; then
-  info "Creating systemd drop-in override to point at remote RPC and use explicit payout address"
-  mkdir -p /etc/systemd/system/p2pool.service.d
-  cat > /tmp/p2pool-override.conf <<EOF
-[Service]
-ExecStart=
-ExecStart=$P2POOL_DIR/contrib/p2pool-run.sh --net bitcoincash --address $PAYOUT_ADDRESS $RPC_USER $RPC_PASS --bitcoind-address $RPC_HOST --bitcoind-rpc-port $RPC_PORT
+# Write /etc/p2pool-bot.env if a bot token was provided
+if [[ -n "$BOT_TOKEN" ]]; then
+    info "Writing /etc/p2pool-bot.env"
+    cat > /etc/p2pool-bot.env <<EOF
+BOT_TOKEN=$BOT_TOKEN
+LOCAL_EVENT_PORT=9349
+P2POOL_API_URL=http://127.0.0.1:9348
+SUBSCRIPTIONS_FILE=$P2POOL_DIR/telegram_bot/subscriptions.json
 EOF
-  mv /tmp/p2pool-override.conf /etc/systemd/system/p2pool.service.d/override.conf
-  systemctl daemon-reload
-  systemctl restart p2pool.service
-  info "Override installed and service restarted"
+    chmod 600 /etc/p2pool-bot.env
+    info "Bot env file written: /etc/p2pool-bot.env"
 fi
+
+systemctl daemon-reload
 info "Installer completed."
+hr
+echo "  Installation complete — summary:"
+echo "    User:            $USER"
+echo "    p2pool dir:      $P2POOL_DIR"
+echo "    Network:         $NETWORK"
+echo "    bitcoind RPC:    ${RPC_USER}@${RPC_HOST}:${RPC_PORT}"
+if [[ -n "$RPC_PASS" ]]; then
+    echo "    RPC password:    (set)"
+else
+    echo "    RPC password:    NOT SET"
+fi
+echo "    Payout address:  $PAYOUT_ADDRESS"
+echo "    Service file:    /etc/systemd/system/p2pool.service"
+if [[ -n "$BOT_TOKEN" ]]; then
+    echo "    Telegram bot:    enabled — /etc/p2pool-bot.env written"
+    echo "    Node name:       ${_effective_node_name}"
+else
+    echo "    Telegram bot:    disabled"
+fi
+hr
 echo
-echo "Next manual steps (important):"
-echo " - Edit /etc/systemd/system/p2pool.service or create /etc/systemd/system/p2pool.service.d/override.conf to supply your RPC user/password and explicit payout address (without 'bitcoincash:' prefix)." 
-echo " - Example override to set payout address:\n  [Service]\n  ExecStart=\"\"\n  ExecStart=/home/$USER/Github/p2pool/contrib/p2pool-run.sh --net bitcoincash --address <YOUR_ADDR> <rpcuser> <rpcpassword>\n" 
-echo " - After editing, run: systemctl daemon-reload && systemctl restart p2pool.service && journalctl -u p2pool.service -n 200 --no-pager"
+
+if [[ -z "$RPC_PASS" ]]; then
+    echo "  ⚠  RPC password was not set. Edit the service before starting:"
+    echo "       sudo systemctl edit p2pool.service"
+    echo "     Paste the following (replacing <PASSWORD>):"
+    echo "       [Service]"
+    echo "       ExecStart="
+    echo "       ExecStart=$_EXECSTART <PASSWORD>"
+    echo
+fi
+
+echo "  To start p2pool:"
+echo "    sudo systemctl start p2pool.service"
+echo "    sudo journalctl -u p2pool.service -n 100 --no-pager -f"
+echo
+
+if [[ -z "$BOT_TOKEN" ]]; then
+    echo "  To enable Telegram bot notifications later:"
+    echo "    1. Get a token from @BotFather on Telegram"
+    echo "    2. sudo install -m 600 -o $USER $P2POOL_DIR/telegram_bot/.env.example /etc/p2pool-bot.env"
+    echo "    3. sudo nano /etc/p2pool-bot.env   # set BOT_TOKEN"
+    echo "    4. sudo systemctl restart p2pool.service"
+    echo
+fi
+
+echo "  Full documentation: INSTALL_UBUNTU_24.04_PY2_PYPY.md"
 
 exit 0

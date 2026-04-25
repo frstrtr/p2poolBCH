@@ -5,6 +5,7 @@ import gc
 import json
 import os
 import random
+import subprocess
 import sys
 import time
 import signal
@@ -20,7 +21,7 @@ from twisted.python import log
 from nattraverso import portmapper, ipdiscover
 
 import bitcoin.p2p as bitcoin_p2p, bitcoin.data as bitcoin_data
-from bitcoin import stratum, worker_interface, helper
+from bitcoin import stratum, worker_interface, helper, notifier
 from bitcoin.broadcaster import NetworkBroadcaster
 from util import fixargparse, jsonrpc, variable, deferral, math, logging, switchprotocol
 from . import networks, web, work
@@ -334,6 +335,48 @@ def main(args, net, datadir_path, merged_urls, worker_endpoint):
         wb = work.WorkerBridge(node, my_address, args.donation_percentage,
                                merged_urls, args.worker_fee, args, pubkeys,
                                bitcoind, args.share_rate)
+        
+        if args.run_bot and not args.local_bot_url:
+            args.local_bot_url = 'http://127.0.0.1:9349'
+        
+        if args.local_bot_url:
+            import socket as _socket
+            _node_name = args.node_name or _socket.gethostname()
+            _pusher = notifier.LocalEventPusher(args.local_bot_url, _node_name)
+            wb.worker_connected.watch(_pusher.on_worker_connected)
+            wb.worker_disconnected.watch(_pusher.on_worker_disconnected)
+            wb.share_found.watch(_pusher.on_share_found)
+            wb.block_found.watch(_pusher.on_block_found)
+        
+        if args.run_bot:
+            _bot_env = os.environ.copy()
+            if args.bot_env_file:
+                try:
+                    with open(args.bot_env_file) as _f:
+                        for _line in _f:
+                            _line = _line.strip()
+                            if _line and not _line.startswith('#') and '=' in _line:
+                                _k, _v = _line.split('=', 1)
+                                _bot_env[_k.strip()] = _v.strip()
+                except Exception as _e:
+                    print 'Warning: could not read bot env file %s: %s' % (args.bot_env_file, _e)
+            _p2pool_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            _bot_proc = subprocess.Popen(
+                [args.bot_python, '-m', 'telegram_bot.bot'],
+                cwd=_p2pool_root,
+                env=_bot_env,
+            )
+            print 'Telegram bot started (PID %d)' % (_bot_proc.pid,)
+            def _stop_bot():
+                if _bot_proc.poll() is None:
+                    print 'Stopping Telegram bot (PID %d)...' % (_bot_proc.pid,)
+                    _bot_proc.terminate()
+                    try:
+                        _bot_proc.wait()
+                    except Exception:
+                        pass
+            reactor.addSystemEventTrigger('before', 'shutdown', _stop_bot)
+        
         web_root = web.get_web_root(wb, datadir_path, bitcoind_getinfo_var, static_dir=args.web_static)
         caching_wb = worker_interface.CachingWorkerBridge(wb)
         worker_interface.WorkerInterface(caching_wb).attach_to(web_root, get_handler=lambda request: request.redirect('/static/'))
@@ -629,6 +672,23 @@ def run():
     broadcaster_group.add_argument('--broadcaster-min-peers', metavar='MIN_PEERS',
         help='minimum number of peers for block broadcaster (default: 5)',
         type=int, action='store', default=5, dest='broadcaster_min_peers')
+    
+    bot_group = parser.add_argument_group('telegram bot notifier')
+    bot_group.add_argument('--local-bot-url', metavar='URL',
+        help='POST worker/share/block events to this local URL (default: disabled)',
+        type=str, action='store', default=None, dest='local_bot_url')
+    bot_group.add_argument('--node-name', metavar='NAME',
+        help='name included in bot event payloads (default: hostname)',
+        type=str, action='store', default=None, dest='node_name')
+    bot_group.add_argument('--run-bot',
+        help='launch the Telegram bot (telegram_bot/bot.py) as a child process and keep it running alongside p2pool; also enables --local-bot-url with the default port if not set',
+        action='store_true', default=False, dest='run_bot')
+    bot_group.add_argument('--bot-env-file', metavar='PATH',
+        help='load environment variables (KEY=VALUE) from this file into the bot subprocess (e.g. /etc/p2pool-bot.env)',
+        type=str, action='store', default=None, dest='bot_env_file')
+    bot_group.add_argument('--bot-python', metavar='PYTHON',
+        help='Python 3 executable (or venv python) to use for the bot subprocess (default: python3)',
+        type=str, action='store', default='python3', dest='bot_python')
     
     args = parser.parse_args()
     

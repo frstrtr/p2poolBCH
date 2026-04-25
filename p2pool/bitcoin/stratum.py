@@ -46,6 +46,11 @@ class StratumRPCMiningProvider(object):
         self.username = username.strip()
         
         self.user, self.address, self.desired_share_target, self.desired_pseudoshare_target = self.wb.get_user_details(username)
+        try:
+            peer_ip = self.transport.getPeer().host
+            self.wb.worker_connected.happened(self.user, self.address, peer_ip)
+        except:
+            pass
         reactor.callLater(0, self._send_work)
         return True
 
@@ -160,7 +165,14 @@ class StratumProtocol(jsonrpc.LineBasedPeer):
         self.svc_mining = StratumRPCMiningProvider(self.factory.wb, self.other, self.transport)
     
     def connectionLost(self, reason):
-        self.svc_mining.close()
+        svc = self.svc_mining
+        if getattr(svc, 'address', None) is not None:
+            try:
+                peer_ip = self.transport.getPeer().host
+                svc.wb.worker_disconnected.happened(svc.user, svc.address, peer_ip)
+            except:
+                pass
+        svc.close()
 
 class StratumServerFactory(protocol.ServerFactory):
     protocol = StratumProtocol

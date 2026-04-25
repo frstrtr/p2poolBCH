@@ -39,6 +39,10 @@ class WorkerBridge(worker_interface.WorkerBridge):
         self.running = True
         self.pseudoshare_received = variable.Event()
         self.share_received = variable.Event()
+        self.worker_connected = variable.Event()    # args: (username, address, peer_ip)
+        self.worker_disconnected = variable.Event() # args: (username, address, peer_ip)
+        self.share_found = variable.Event()         # args: (username, address, share_hash_hex, dead)
+        self.block_found = variable.Event()         # args: (username, address, block_hash_hex)
         self.local_rate_monitor = math.RateMonitor(10*60)
         self.local_addr_rate_monitor = math.RateMonitor(10*60)
         
@@ -457,7 +461,12 @@ class WorkerBridge(worker_interface.WorkerBridge):
             except:
                 log.err(None, 'Error while processing potential block:')
             
-            username, _, _, _ = self.get_user_details(username)
+            username, address, _, _ = self.get_user_details(username)
+            if pow_hash <= header['bits'].target:
+                try:
+                    self.block_found.happened(username, address, '%064x' % (header_hash,))
+                except:
+                    log.err(None, 'Error firing block_found event:')
             assert header['previous_block'] == ba['previous_block']
             assert header['merkle_root'] == bitcoin_data.check_merkle_link(bitcoin_data.hash256(new_packed_gentx), merkle_link)
             assert header['bits'] == ba['bits']
@@ -539,6 +548,10 @@ class WorkerBridge(worker_interface.WorkerBridge):
                     log.err(None, 'Error forwarding block solution:')
                 
                 self.share_received.happened(bitcoin_data.target_to_average_attempts(share.target), not on_time, share.hash)
+                try:
+                    self.share_found.happened(username, address, p2pool_data.format_hash(share.hash), not on_time)
+                except:
+                    log.err(None, 'Error firing share_found event:')
 
             if pow_hash > pseudoshare_target:
                 print 'Worker %s submitted share with hash > target:' % (username,)

@@ -242,5 +242,98 @@ Security and notes
   (Nagios/Prometheus/Alertmanager/etc.) if you need actionable alerts.
 - Time synchronization is critical for correct block timestamp handling; ensure chrony is allowed network access.
 ]
-[Unit]
 
+## Telegram bot notifications (optional)
+
+The repo includes a Python 3 Telegram bot (`telegram_bot/`) that sends push notifications to
+subscribed miners when workers connect/disconnect, shares are found, or blocks are solved.
+
+The bot runs as a **child process of p2pool** — no separate service is needed. The p2pool wrapper
+`contrib/p2pool-run.sh` auto-enables it if two things exist:
+
+1. `bot-venv/` — a Python 3 venv with the bot's dependencies (created by the installer)
+2. `/etc/p2pool-bot.env` — a file containing `BOT_TOKEN` and other settings
+
+### What the installer does
+
+The installer (`contrib/install_ubuntu_24.04_py2_pypy.sh`) already:
+
+- Installs `python3` and `python3-venv` via apt
+- Creates `<p2pool-dir>/bot-venv/` and runs
+  `pip install -r telegram_bot/requirements.txt` inside it
+- Updates the `p2pool-run.sh` wrapper to detect the venv and env file and pass
+  `--run-bot --bot-python .../bot-venv/bin/python3 --bot-env-file /etc/p2pool-bot.env`
+  to p2pool automatically when both are present
+
+### Enabling the bot
+
+1. Create `/etc/p2pool-bot.env` from the template (mode 600, owner matches the service user):
+
+```bash
+sudo install -m 600 -o ubuntu /path/to/p2pool/telegram_bot/.env.example /etc/p2pool-bot.env
+sudo nano /etc/p2pool-bot.env
+```
+
+Minimum required content:
+
+```ini
+BOT_TOKEN=<token from @BotFather>
+# These have sensible defaults but can be overridden:
+LOCAL_EVENT_PORT=9349
+P2POOL_API_URL=http://127.0.0.1:9348
+SUBSCRIPTIONS_FILE=/home/ubuntu/Github/p2pool/telegram_bot/subscriptions.json
+```
+
+2. Restart p2pool:
+
+```bash
+sudo systemctl restart p2pool.service
+sudo journalctl -u p2pool.service -n 50 --no-pager | grep -i bot
+```
+
+You should see a line like:
+
+```
+Telegram bot started (PID 12345)
+```
+
+### Bot CLI args (manual / advanced)
+
+If you are not using `p2pool-run.sh` you can pass the args directly:
+
+```bash
+pypy run_p2pool.py --net bitcoincash \
+  --run-bot \
+  --bot-env-file /etc/p2pool-bot.env \
+  --node-name vm301 \
+  [... other args ...]
+```
+
+Optional overrides:
+
+| Arg | Default | Purpose |
+|-----|---------|--------|
+| `--run-bot` | (flag) | Launch bot subprocess |
+| `--bot-python PATH` | `python3` | Python 3 interpreter or venv python to use |
+| `--bot-env-file PATH` | (none) | File of `KEY=VALUE` env vars for the bot |
+| `--local-bot-url URL` | `http://127.0.0.1:9349` | Where p2pool POSTs events |
+| `--node-name NAME` | hostname | Identifier shown in alert messages |
+
+### User interaction (Telegram)
+
+Send `/start` to the bot. Set your BCH mining address via the **📝 Set mining address** button,
+then toggle individual alert types (connect, disconnect, share, block) with the inline buttons.
+Alerts are matched by address — you receive only events for the address you registered.
+
+### Standalone bot (without --run-bot)
+
+If you prefer to run the bot independently, use `telegram_bot/bot.service`:
+
+```bash
+sudo cp /path/to/p2pool/telegram_bot/bot.service /etc/systemd/system/p2pool-bot.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now p2pool-bot.service
+```
+
+In that case, do **not** pass `--run-bot` to p2pool; pass `--local-bot-url http://127.0.0.1:9349`
+instead so that p2pool POSTs events but does not spawn the bot itself.

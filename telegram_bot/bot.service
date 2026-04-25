@@ -1,0 +1,19 @@
+# This service file is for running the bot STANDALONE (without --run-bot).
+# When using --run-bot in p2pool's CLI, the bot is launched automatically as a
+# child process of p2pool — no separate service needed.
+[Unit]
+Description=P2Pool BCH Telegram Bot (standalone)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Github/p2pool
+# Put your secrets in /etc/p2pool-bot.env (mode 600, owner ubuntu)
+EnvironmentFile=/etc/p2pool-bot.env
+ExecStart=/usr/bin/python3 -m telegram_bot.bot
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
