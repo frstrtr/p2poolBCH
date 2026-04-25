@@ -8,6 +8,28 @@ from p2pool.bitcoin import data as bitcoin_data
 from p2pool.util import deferral, jsonrpc
 txlookup = {}
 
+# Global broadcaster instance (initialized by main.py)
+_broadcaster = None
+
+def set_broadcaster(broadcaster):
+    """Set the global broadcaster instance for multi-peer propagation"""
+    global _broadcaster
+    print 'Helper: Broadcaster instance registered for multi-peer propagation'
+    _broadcaster = broadcaster
+
+def get_broadcaster():
+    """Get the global broadcaster instance"""
+    return _broadcaster
+
+def get_broadcaster_status():
+    """Get broadcaster status for web dashboard"""
+    if _broadcaster:
+        return _broadcaster.get_network_status()
+    return {
+        'enabled': False,
+        'message': 'Multi-peer broadcaster disabled'
+    }
+
 @deferral.retry('Error while checking Bitcoin connection:', 1)
 @defer.inlineCallbacks
 def check(bitcoind, net, args):
@@ -165,10 +187,14 @@ def submit_block_rpc(block, ignore_failure, bitcoind, bitcoind_work, net):
     if (not success and success_expected and not ignore_failure) or (success and not success_expected):
         print >>sys.stderr, 'Block submittal result: %s (%r) Expected: %s' % (success, result, success_expected)
 
-def submit_block(block, ignore_failure, node):
+def submit_block(block, ignore_failure, node, broadcaster=None):
     submit_block_p2p(block, node.factory, node.net)
     submit_block_rpc(block, ignore_failure, node.bitcoind, node.bitcoind_work,
                      node.net)
+    # If broadcaster available, do parallel broadcast to additional peers
+    if broadcaster is not None:
+        d = broadcaster.broadcast_block(block)
+        d.addErrback(lambda f: sys.stderr.write('Broadcaster error: %s\n' % f.getErrorMessage()))
 
 @defer.inlineCallbacks
 def check_block_header(bitcoind, block_hash):

@@ -745,6 +745,7 @@ class Node(object):
     def got_conn(self, conn):
         if conn.nonce in self.peers:
             raise ValueError('already have peer')
+        conn.connect_time = time.time()
         self.peers[conn.nonce] = conn
         
         print '%s peer %s:%i established. p2pool version: %i %r' % ('Incoming connection from' if conn.incoming else 'Outgoing connection to', conn.addr[0], conn.addr[1], conn.other_version, conn.other_sub_version)

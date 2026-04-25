@@ -12,7 +12,7 @@ from twisted.python import log
 from twisted.web import resource, static
 
 import p2pool
-from bitcoin import data as bitcoin_data
+from bitcoin import data as bitcoin_data, helper as bitcoin_helper
 from . import data as p2pool_data, p2p
 from util import deferral, deferred_resource, graph, math, memory, pack, variable
 
@@ -433,13 +433,64 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
         protocol_version=p2p.Protocol.VERSION,
         uptime=time.time() - start_time,
     )))
-    web_root.putChild('peer_list', WebInterface(lambda: [
-        dict(host=peer.transport.getPeer().host, port=peer.transport.getPeer().port,
-             version=peer.other_sub_version, incoming=peer.incoming)
-        for peer in node.p2p_node.peers.itervalues()
-    ]))
-    web_root.putChild('luck_stats', WebInterface(lambda: None))
-    web_root.putChild('broadcaster_status', WebInterface(lambda: None))
+    def get_peer_list():
+        result = []
+        for peer in node.p2p_node.peers.itervalues():
+            host = peer.transport.getPeer().host
+            port = peer.transport.getPeer().port
+            uptime = time.time() - getattr(peer, 'connect_time', time.time())
+            result.append(dict(
+                address='%s:%i' % (host, port),
+                host=host,
+                port=port,
+                web_port=node.net.WORKER_PORT,
+                version=peer.other_sub_version,
+                incoming=peer.incoming,
+                uptime=uptime,
+                downtime=0,
+                txpool_size=peer.remembered_txs_size,
+            ))
+        return result
+    web_root.putChild('peer_list', WebInterface(get_peer_list))
+    def get_luck_stats():
+        if node.best_share_var.value is None or node.bitcoind_work.value is None:
+            return dict(luck_available=False, current_luck_trend=None, blocks=[])
+        attempts_per_block = bitcoin_data.target_to_average_attempts(node.bitcoind_work.value['bits'].target)
+        attempts_per_share = bitcoin_data.target_to_average_attempts(node.tracker.items[node.best_share_var.value].max_target)
+        # Collect found blocks from share chain
+        chain_height = node.tracker.get_height(node.best_share_var.value)
+        raw_blocks = [
+            dict(ts=s.timestamp, hash='%064x' % s.header_hash, share_hash=s.hash,
+                 share_target=s.target)
+            for s in node.tracker.get_chain(node.best_share_var.value, min(chain_height, node.net.CHAIN_LENGTH))
+            if s.pow_hash <= s.header['bits'].target
+        ]
+        # Compute current round luck: shares since last block vs expected shares
+        current_luck_trend = None
+        if attempts_per_share > 0:
+            shares_since_last_block = chain_height
+            if raw_blocks:
+                last_block_height = node.tracker.get_height(raw_blocks[0]['share_hash'])
+                shares_since_last_block = chain_height - last_block_height
+            expected_shares = float(attempts_per_block) / attempts_per_share
+            if shares_since_last_block > 0 and expected_shares > 0:
+                current_luck_trend = 100.0 * expected_shares / shares_since_last_block
+        blocks_out = []
+        for b in raw_blocks:
+            luck = None
+            if attempts_per_share > 0:
+                expected = float(attempts_per_block) / attempts_per_share
+                actual_diff = bitcoin_data.target_to_difficulty(b['share_target'])
+                if actual_diff > 0:
+                    luck = 100.0 * expected / max(1, actual_diff)
+            blocks_out.append(dict(ts=b['ts'], hash=b['hash'], luck=luck))
+        return dict(
+            luck_available=True,
+            current_luck_trend=current_luck_trend,
+            blocks=blocks_out,
+        )
+    web_root.putChild('luck_stats', WebInterface(get_luck_stats))
+    web_root.putChild('broadcaster_status', WebInterface(bitcoin_helper.get_broadcaster_status))
     web_root.putChild('merged_broadcaster_status', WebInterface(lambda: None))
     web_root.putChild('merged_stats', WebInterface(lambda: None))
     web_root.putChild('recent_merged_blocks', WebInterface(lambda: []))

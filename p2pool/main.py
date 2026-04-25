@@ -21,6 +21,7 @@ from nattraverso import portmapper, ipdiscover
 
 import bitcoin.p2p as bitcoin_p2p, bitcoin.data as bitcoin_data
 from bitcoin import stratum, worker_interface, helper
+from bitcoin.broadcaster import NetworkBroadcaster
 from util import fixargparse, jsonrpc, variable, deferral, math, logging, switchprotocol
 from . import networks, web, work
 import p2pool, p2pool.data as p2pool_data, p2pool.node as p2pool_node
@@ -192,6 +193,45 @@ def main(args, net, datadir_path, merged_urls, worker_endpoint):
         global gnode
         gnode = node = p2pool_node.Node(factory, bitcoind, shares.values(), known_verified, net)
         yield node.start()
+        
+        # Initialize block broadcaster for parallel propagation
+        broadcaster = None
+        if not args.disable_broadcaster:
+            print ''
+            print '=' * 70
+            print 'INITIALIZING MULTI-PEER BROADCASTER'
+            print '=' * 70
+            try:
+                broadcaster = NetworkBroadcaster(
+                    net=net.PARENT,
+                    coind=bitcoind,
+                    local_factory=factory,
+                    local_addr=(args.bitcoind_address, args.bitcoind_p2p_port),
+                    datadir_path=datadir_path,
+                    chain_name=net.PARENT.SYMBOL.lower()
+                )
+                broadcaster.max_peers = args.broadcaster_max_peers
+                broadcaster.min_peers = args.broadcaster_min_peers
+                yield broadcaster.start()
+                helper.set_broadcaster(broadcaster)
+                node.broadcaster = broadcaster
+                print ''
+                print '*** BROADCASTER READY ***'
+                print '  Max peers: %d' % broadcaster.max_peers
+                print '  Min peers: %d' % broadcaster.min_peers
+                print '  Peer database: %d peers' % len(broadcaster.peer_db)
+                print '  Active connections: %d' % len(broadcaster.connections)
+                print '=' * 70
+                print ''
+            except Exception as e:
+                print '    ...block broadcaster failed to start (continuing without it): %s' % e
+                traceback.print_exc()
+                broadcaster = None
+        else:
+            print ''
+            print 'Multi-peer broadcaster: DISABLED'
+            print '  (Use without --disable-broadcaster to enable multi-peer broadcasting)'
+            print ''
         
         for share_hash in shares:
             if share_hash not in node.tracker.items:
@@ -448,6 +488,11 @@ def main(args, net, datadir_path, merged_urls, worker_endpoint):
                     log.err()
         status_thread()
     except:
+        if 'broadcaster' in dir() and broadcaster is not None:
+            try:
+                broadcaster.stop()
+            except Exception as e:
+                print 'Warning: Broadcaster shutdown error: %s' % str(e)
         reactor.stop()
         log.err(None, 'Fatal error:')
 
@@ -573,6 +618,17 @@ def run():
     bitcoind_group.add_argument('--allow-obsolete-bitcoind',
         help='allow the use of coin daemons (bitcoind) that do not support all of the required softforks for this network (e.g. Bitcoin Core and segwit2x)',
         action='store_const', const=True, default=False, dest='allow_obsolete_bitcoind')
+    
+    broadcaster_group = parser.add_argument_group('multi-peer broadcaster')
+    broadcaster_group.add_argument('--disable-broadcaster',
+        help='disable multi-peer block broadcaster (default: enabled)',
+        action='store_true', default=False, dest='disable_broadcaster')
+    broadcaster_group.add_argument('--broadcaster-max-peers', metavar='MAX_PEERS',
+        help='maximum number of peers for block broadcaster (default: 20)',
+        type=int, action='store', default=20, dest='broadcaster_max_peers')
+    broadcaster_group.add_argument('--broadcaster-min-peers', metavar='MIN_PEERS',
+        help='minimum number of peers for block broadcaster (default: 5)',
+        type=int, action='store', default=5, dest='broadcaster_min_peers')
     
     args = parser.parse_args()
     
