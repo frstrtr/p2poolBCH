@@ -495,7 +495,9 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
     web_root.putChild('merged_stats', WebInterface(lambda: None))
     web_root.putChild('recent_merged_blocks', WebInterface(lambda: []))
     web_root.putChild('discovered_merged_blocks', WebInterface(lambda: []))
-    web_root.putChild('current_merged_payouts', WebInterface(lambda: {}))
+    web_root.putChild('current_merged_payouts', WebInterface(lambda: dict(
+        (address, {'amount': value/1e8, 'merged': []}) for address, value
+            in node.get_current_txouts().iteritems())))
 
     web_root.putChild('peer_addresses', WebInterface(lambda: ' '.join('%s%s' % (peer.transport.getPeer().host, ':'+str(peer.transport.getPeer().port) if peer.transport.getPeer().port != node.net.P2P_PORT else '') for peer in node.p2p_node.peers.itervalues())))
     web_root.putChild('peer_txpool_sizes', WebInterface(lambda: dict(('%s:%i' % (peer.transport.getPeer().host, peer.transport.getPeer().port), peer.remembered_txs_size) for peer in node.p2p_node.peers.itervalues())))
