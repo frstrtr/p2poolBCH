@@ -45,10 +45,24 @@ def _atomic_write(filename, data):
         os.remove(filename)
         os.rename(filename + '.new', filename)
 
-def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Event(), static_dir=None):
+def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Event(), static_dir=None,
+                 enable_miner_messages=False, transition_message=None, trusted_proxy=None):
     node = wb.node
     start_time = time.time()
-    
+
+    _LOCALHOST_IPS = ('127.0.0.1', '::1', '::ffff:127.0.0.1')
+
+    def _get_real_client_ip(request):
+        peer_ip = request.getClientIP()
+        if trusted_proxy and peer_ip == trusted_proxy:
+            forwarded = request.getHeader('X-Forwarded-For')
+            if forwarded:
+                return forwarded.split(',')[0].strip()
+        return peer_ip
+
+    def _is_localhost(request):
+        return _get_real_client_ip(request) in _LOCALHOST_IPS
+
     web_root = resource.Resource()
     
     def get_users():
@@ -93,7 +107,7 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
     
     def get_global_stats():
         # averaged over last hour
-        if node.tracker.get_height(node.best_share_var.value) < 10:
+        if node.best_share_var.value is None or node.tracker.get_height(node.best_share_var.value) < 10:
             return None
         lookbehind = min(node.tracker.get_height(node.best_share_var.value), 3600//node.net.SHARE_PERIOD)
         
@@ -176,11 +190,14 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
             attempts_to_share=bitcoin_data.target_to_average_attempts(node.tracker.items[node.best_share_var.value].max_target),
             attempts_to_block=bitcoin_data.target_to_average_attempts(node.bitcoind_work.value['bits'].target),
             block_value=node.bitcoind_work.value['subsidy']*1e-8,
+            block_value_payments=node.bitcoind_work.value['subsidy']*1e-8 * (1 - wb.donation_percentage/100),
+            block_value_miner=node.bitcoind_work.value['subsidy']*1e-8 * (1 - wb.donation_percentage/100) * (1 - getattr(wb, 'node_owner_fee', wb.worker_fee)/100),
+            attempts_to_merged_block=None,
             warnings=p2pool_data.get_warnings(node.tracker, node.best_share_var.value, node.net, bitcoind_getinfo_var.value, node.bitcoind_work.value),
             donation_proportion=wb.donation_percentage/100,
             version=p2pool.__version__,
             protocol_version=p2p.Protocol.VERSION,
-            fee=wb.worker_fee,
+            fee=getattr(wb, 'node_owner_fee', wb.worker_fee),
         )
     
     class WebInterface(deferred_resource.DeferredResource):
@@ -213,6 +230,222 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
     web_root.putChild('patron_sendmany', WebInterface(get_patron_sendmany, 'text/plain'))
     web_root.putChild('global_stats', WebInterface(get_global_stats))
     web_root.putChild('local_stats', WebInterface(get_local_stats))
+
+    # ==== Version Signaling ====
+    def get_version_signaling():
+        if node.best_share_var.value is None:
+            return None
+        chain_height = node.tracker.get_height(node.best_share_var.value)
+        if chain_height < 10:
+            return None
+        chain_length = node.net.CHAIN_LENGTH
+        lookbehind = min(chain_height, chain_length // 10)
+        try:
+            counts = p2pool_data.get_desired_version_counts(node.tracker, node.best_share_var.value, lookbehind)
+        except:
+            counts = {}
+        total_weight = sum(counts.itervalues())
+        if total_weight == 0:
+            return None
+        version_percentages = {}
+        for version, weight in counts.iteritems():
+            version_percentages[str(version)] = {
+                'weight': weight,
+                'percentage': (weight / total_weight) * 100
+            }
+        share_type_counts = {}
+        share_type_names = {
+            17: 'Share', 32: 'PreSegwitShare', 33: 'NewShare',
+            34: 'SegwitMiningShare', 35: 'PaddingBugfixShare',
+        }
+        overall_total = 0
+        full_chain_desired = {}
+        _scan_limit = min(chain_height, chain_length)
+        try:
+            _sh = node.best_share_var.value
+            _pos = 0
+            while _sh is not None and _pos < _scan_limit:
+                _s = node.tracker.items.get(_sh)
+                if _s is None:
+                    break
+                share_type_counts[_s.VERSION] = share_type_counts.get(_s.VERSION, 0) + 1
+                _dv = getattr(_s, 'desired_version', _s.VERSION)
+                full_chain_desired[_dv] = full_chain_desired.get(_dv, 0) + 1
+                overall_total += 1
+                _sh = _s.previous_hash
+                _pos += 1
+        except:
+            pass
+        total_shares = sum(share_type_counts.values()) if share_type_counts else 0
+        share_types = {}
+        for version, cnt in sorted(share_type_counts.items()):
+            name = share_type_names.get(version, 'V%d' % version)
+            share_types[str(version)] = {
+                'name': name, 'count': cnt,
+                'percentage': (cnt / total_shares * 100) if total_shares > 0 else 0
+            }
+        full_chain_version_pcts = {}
+        for ver, cnt in full_chain_desired.items():
+            full_chain_version_pcts[str(ver)] = {
+                'count': cnt,
+                'percentage': (cnt * 100.0 / overall_total) if overall_total > 0 else 0
+            }
+        current_share = node.tracker.items.get(node.best_share_var.value)
+        current_share_type = current_share.VERSION if current_share else None
+        current_share_name = share_type_names.get(current_share_type, 'V%d' % current_share_type) if current_share_type else 'Unknown'
+        sampling_window_size = chain_length // 10
+        majority_version = max(counts, key=counts.__getitem__) if counts else current_share_type
+        return dict(
+            versions=version_percentages,
+            share_types=share_types,
+            full_chain_versions=full_chain_version_pcts,
+            current_share_type=current_share_type,
+            current_share_name=current_share_name,
+            chain_height=chain_height,
+            chain_length_required=chain_length,
+            chain_maturity=min(100.0, chain_height * 100.0 / chain_length),
+            chain_ready=(chain_height >= chain_length),
+            sampling_window_size=sampling_window_size,
+            show_transition=False,  # BCH: no pending transition
+            status='no_transition',
+        )
+    web_root.putChild('version_signaling', WebInterface(get_version_signaling))
+
+    # ==== Stratum Stats (BCH: uses local rates since no pool_stats module) ====
+    def get_stratum_stats():
+        try:
+            miner_hash_rates, miner_dead_hash_rates = wb.get_local_rates()
+            formatted_workers = {}
+            for worker_name, hr in miner_hash_rates.iteritems():
+                doa = miner_dead_hash_rates.get(worker_name, 0)
+                formatted_workers[worker_name] = {
+                    'hash_rate': hr,
+                    'dead_hash_rate': doa,
+                    'shares': 0,
+                    'accepted': 0,
+                    'rejected': 0,
+                    'last_seen': time.time(),
+                    'first_seen': start_time,
+                    'connections': 1,
+                    'active_connections': 1,
+                    'backup_connections': 0,
+                    'connection_difficulties': [],
+                    'merged_addresses': {},
+                    'merged_auto_converted': False,
+                    'merged_redistributed': False,
+                    'merged_reverse_converted': False,
+                }
+            return {
+                'pool': {
+                    'total_workers': len(formatted_workers),
+                    'total_hash_rate': sum(miner_hash_rates.itervalues()),
+                },
+                'workers': formatted_workers,
+            }
+        except Exception as e:
+            return {'error': str(e), 'workers': {}}
+    web_root.putChild('stratum_stats', WebInterface(get_stratum_stats))
+
+    def get_stratum_security():
+        return {'bans': [], 'ddos_detected': False}
+    web_root.putChild('stratum_security', WebInterface(get_stratum_security))
+
+    def get_ban_stats():
+        return {'bans': [], 'total_banned': 0}
+    web_root.putChild('ban_stats', WebInterface(get_ban_stats))
+
+    def get_connected_miners():
+        try:
+            miner_hash_rates, _ = wb.get_local_rates()
+            addresses = set()
+            for user in miner_hash_rates:
+                base = user.split('+')[0].split('/')[0].split('.')[0].split('_')[0]
+                if base:
+                    addresses.add(base)
+            return list(addresses)
+        except:
+            return []
+    web_root.putChild('connected_miners', WebInterface(get_connected_miners))
+
+    # ==== Best Share ====
+    def get_best_share():
+        if node.best_share_var.value is None:
+            return None
+        network_difficulty = bitcoin_data.target_to_difficulty(node.bitcoind_work.value['bits'].target)
+
+        def pct_of_block(diff, net_diff):
+            return (diff / net_diff * 100) if net_diff > 0 and diff > 0 else 0
+
+        tip = node.best_share_var.value
+        height = node.tracker.get_height(tip)
+        window = min(height, node.net.REAL_CHAIN_LENGTH)
+        best_diff_round = 0
+        best_diff_all = 0
+        try:
+            for s in node.tracker.get_chain(tip, window):
+                diff = bitcoin_data.target_to_difficulty(s.target)
+                if diff > best_diff_all:
+                    best_diff_all = diff
+                if diff > best_diff_round:
+                    best_diff_round = diff
+        except Exception:
+            pass
+        median_pct = None
+        try:
+            diffs = sorted(bitcoin_data.target_to_difficulty(s.target)
+                           for s in node.tracker.get_chain(tip, window))
+            n = len(diffs)
+            if n > 0:
+                median_diff = diffs[n // 2] if n % 2 == 1 else (diffs[n // 2 - 1] + diffs[n // 2]) / 2.0
+                median_pct = pct_of_block(median_diff, network_difficulty)
+        except Exception:
+            pass
+        result = dict(
+            network_difficulty=network_difficulty,
+            all_time=dict(
+                difficulty=best_diff_all,
+                pct_of_block=pct_of_block(best_diff_all, network_difficulty),
+                net_diff_at_time=network_difficulty,
+                miner=None, timestamp=None,
+            ),
+            session=dict(
+                difficulty=best_diff_round,
+                pct_of_block=pct_of_block(best_diff_round, network_difficulty),
+                net_diff_at_time=network_difficulty,
+                miner=None, timestamp=None, started=start_time,
+            ),
+            round=dict(
+                difficulty=best_diff_round,
+                pct_of_block=pct_of_block(best_diff_round, network_difficulty),
+                net_diff_at_time=network_difficulty,
+                miner=None, timestamp=None, started=None,
+            ),
+        )
+        if median_pct is not None:
+            result['median_pct'] = median_pct
+        return result
+    web_root.putChild('best_share', WebInterface(get_best_share))
+
+    # ==== Stub endpoints for dashboard compatibility ====
+    web_root.putChild('v36_status', WebInterface(lambda: None))
+    web_root.putChild('node_info', WebInterface(lambda: dict(
+        version=p2pool.__version__,
+        protocol_version=p2p.Protocol.VERSION,
+        uptime=time.time() - start_time,
+    )))
+    web_root.putChild('peer_list', WebInterface(lambda: [
+        dict(host=peer.transport.getPeer().host, port=peer.transport.getPeer().port,
+             version=peer.other_sub_version, incoming=peer.incoming)
+        for peer in node.p2p_node.peers.itervalues()
+    ]))
+    web_root.putChild('luck_stats', WebInterface(lambda: None))
+    web_root.putChild('broadcaster_status', WebInterface(lambda: None))
+    web_root.putChild('merged_broadcaster_status', WebInterface(lambda: None))
+    web_root.putChild('merged_stats', WebInterface(lambda: None))
+    web_root.putChild('recent_merged_blocks', WebInterface(lambda: []))
+    web_root.putChild('discovered_merged_blocks', WebInterface(lambda: []))
+    web_root.putChild('current_merged_payouts', WebInterface(lambda: {}))
+
     web_root.putChild('peer_addresses', WebInterface(lambda: ' '.join('%s%s' % (peer.transport.getPeer().host, ':'+str(peer.transport.getPeer().port) if peer.transport.getPeer().port != node.net.P2P_PORT else '') for peer in node.p2p_node.peers.itervalues())))
     web_root.putChild('peer_txpool_sizes', WebInterface(lambda: dict(('%s:%i' % (peer.transport.getPeer().host, peer.transport.getPeer().port), peer.remembered_txs_size) for peer in node.p2p_node.peers.itervalues())))
     web_root.putChild('pings', WebInterface(defer.inlineCallbacks(lambda: defer.returnValue(
@@ -234,6 +467,12 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
         hash='%064x' % s.header_hash,
         number=p2pool_data.parse_bip0034(s.share_data['coinbase'])[0],
         share='%064x' % s.hash,
+        share_difficulty=bitcoin_data.target_to_difficulty(s.target),
+        network_difficulty=bitcoin_data.target_to_difficulty(s.header['bits'].target),
+        miner=(lambda addr: addr)(bitcoin_data.script2_to_address(s.new_script, node.net.PARENT.ADDRESS_VERSION, -1, node.net.PARENT) or
+               bitcoin_data.script2_to_address(s.new_script, node.net.PARENT.ADDRESS_P2SH_VERSION, -1, node.net.PARENT) or ''),
+        verified=s.hash in node.tracker.verified.items,
+        status='confirmed' if s.hash in node.tracker.verified.items else 'pending',
     ) for s in node.tracker.get_chain(node.best_share_var.value, min(node.tracker.get_height(node.best_share_var.value), node.net.CHAIN_LENGTH)) if s.pow_hash <= s.header['bits'].target]))
     web_root.putChild('uptime', WebInterface(lambda: time.time() - start_time))
     web_root.putChild('stale_rates', WebInterface(lambda: p2pool_data.get_stale_counts(node.tracker, node.best_share_var.value, decent_height(), rates=True)))
@@ -410,6 +649,9 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
         'traffic_rate': graph.DataStreamDescription(dataview_descriptions, is_gauge=False, multivalues=True),
         'getwork_latency': graph.DataStreamDescription(dataview_descriptions),
         'memory_usage': graph.DataStreamDescription(dataview_descriptions),
+        'connected_miners': graph.DataStreamDescription(dataview_descriptions),
+        'unique_miner_count': graph.DataStreamDescription(dataview_descriptions),
+        'worker_count': graph.DataStreamDescription(dataview_descriptions),
     }, hd_obj)
     x = deferral.RobustLoopingCall(lambda: _atomic_write(hd_path, json.dumps(hd.to_obj())))
     x.start(100)
@@ -477,6 +719,14 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
         except:
             if p2pool.DEBUG:
                 traceback.print_exc()
+        # Track worker/miner counts for graphs
+        hd.datastreams['worker_count'].add_datum(t, len(miner_hash_rates))
+        unique_addrs = set()
+        for user in miner_hash_rates:
+            base = user.split(',')[0].split('+')[0].split('/')[0].split('.')[0].split('_')[0]
+            unique_addrs.add(base)
+        hd.datastreams['unique_miner_count'].add_datum(t, len(unique_addrs))
+        hd.datastreams['connected_miners'].add_datum(t, len(unique_addrs))
     x = deferral.RobustLoopingCall(add_point)
     x.start(5)
     stop_event.watch(x.stop)
@@ -484,7 +734,70 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
     def _(new_work):
         hd.datastreams['getwork_latency'].add_datum(time.time(), new_work['latency'])
     new_root.putChild('graph_data', WebInterface(lambda source, view: hd.datastreams[source].dataviews[view].get_data(time.time())))
-    
+
+    # ==== Network difficulty history endpoint ====
+    network_diff_history = []
+    known_diff_timestamps = set()
+    network_diff_history_path = os.path.join(datadir_path, 'network_difficulty_history')
+    raw_nd = _atomic_read(network_diff_history_path)
+    if raw_nd is not None:
+        try:
+            network_diff_history[:] = json.loads(raw_nd)
+            known_diff_timestamps.update(int(b['ts']) for b in network_diff_history if b.get('ts'))
+        except:
+            pass
+
+    def add_network_diff_sample(timestamp, network_diff, source='block'):
+        ts_key = int(timestamp)
+        if ts_key not in known_diff_timestamps:
+            network_diff_history.append({'ts': timestamp, 'network_diff': network_diff, 'source': source})
+            known_diff_timestamps.add(ts_key)
+            network_diff_history.sort(key=lambda x: x['ts'])
+
+    def sample_current_network_diff():
+        try:
+            if wb.current_work.value and 'bits' in wb.current_work.value:
+                add_network_diff_sample(time.time(),
+                    bitcoin_data.target_to_difficulty(wb.current_work.value['bits'].target), 'periodic')
+        except:
+            pass
+
+    def save_network_diff_history():
+        try:
+            while len(network_diff_history) > 2000:
+                oldest = network_diff_history.pop(0)
+                known_diff_timestamps.discard(int(oldest['ts']))
+            _atomic_write(network_diff_history_path, json.dumps(network_diff_history))
+        except:
+            pass
+
+    x_nd = deferral.RobustLoopingCall(save_network_diff_history)
+    x_nd.start(120)
+    stop_event.watch(x_nd.stop)
+    x_nd2 = deferral.RobustLoopingCall(sample_current_network_diff)
+    x_nd2.start(300)
+    stop_event.watch(x_nd2.stop)
+
+    class NetworkDifficultyResource(resource.Resource):
+        def render_GET(self, request):
+            request.setHeader('Content-Type', 'application/json')
+            request.setHeader('Access-Control-Allow-Origin', '*')
+            try:
+                period = (request.args.get('period') or ['hour'])[0]
+                now = time.time()
+                cutoffs = {'hour': 3600, 'day': 86400, 'week': 604800, 'month': 2592000, 'year': 31536000}
+                cutoff = now - cutoffs.get(period, 3600)
+                samples = [d for d in network_diff_history if d['ts'] >= cutoff]
+                if wb.current_work.value and 'bits' in wb.current_work.value:
+                    samples.append({'ts': now,
+                        'network_diff': bitcoin_data.target_to_difficulty(wb.current_work.value['bits'].target),
+                        'source': 'current'})
+                samples.sort(key=lambda x: x['ts'])
+                return json.dumps(samples)
+            except:
+                return json.dumps([])
+    web_root.putChild('network_difficulty', NetworkDifficultyResource())
+
     if static_dir is None:
         static_dir = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), 'web-static')
     web_root.putChild('static', static.File(static_dir))
