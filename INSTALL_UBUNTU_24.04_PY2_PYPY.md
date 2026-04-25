@@ -53,25 +53,34 @@ Prerequisites / assumptions
 
 Automated helper (recommended)
 
-We provide an installer script that automates the steps below: `contrib/install_ubuntu_24.04_py2_pypy.sh`.
-Run it as root (sudo) on a clean Ubuntu 24.04 VM to perform package installation, PyPy extraction,
-local OpenSSL build, cryptography build for PyPy, and creation of a wrapper and systemd service
-template. The service template uses placeholders for RPC credentials and payout address; you must
-edit the unit or create a drop-in to set real values before starting the pool.
+We provide an **interactive** installer at `contrib/install_ubuntu_24.04_py2_pypy.sh`.
+Run it as root (sudo) on a clean Ubuntu 24.04 VM. It will prompt for all required settings
+(user, network, RPC host/port/credentials, payout address, optional Telegram bot token) and
+show a confirmation summary before doing anything. RPC credentials and the payout address are
+baked directly into the generated systemd unit — no post-install editing or drop-in override is
+needed.
 
-Quick start (automated):
+Quick start (interactive):
 
 ```bash
 sudo /home/user0/Github/p2pool/contrib/install_ubuntu_24.04_py2_pypy.sh
 ```
 
-After the script completes, edit the installed systemd unit or create a drop-in override to set
-the RPC credentials from `/home/user0/.bitcoin/bitcoin.conf` and an explicit payout address (do
-not include the `bitcoincash:` prefix). Then reload and restart systemd:
+Or supply all values on the command line and skip prompts:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl restart p2pool.service
+sudo /home/user0/Github/p2pool/contrib/install_ubuntu_24.04_py2_pypy.sh \
+  --user user0 --network bitcoincash \
+  --rpc-host 127.0.0.1 --rpc-port 8332 \
+  --rpc-user bitcoinrpc --rpc-pass YOURPASS \
+  --address YOUR_BCH_ADDRESS \
+  --yes
+```
+
+After the script completes, start the service:
+
+```bash
+sudo systemctl start p2pool.service
 sudo journalctl -u p2pool.service -n 200 --no-pager
 ```
 
@@ -135,28 +144,29 @@ env LD_LIBRARY_PATH=$LD_LIBRARY_PATH OPENSSL_DIR=$OPENSSL_DIR OPENSSL_LIBDIR=$OP
 /home/user0/pypy2.7-v7.3.20-linux64/bin/pypy -m pip install -r /home/user0/Github/p2pool/requirements.txt
 ```
 
-6) Create the p2pool wrapper and the systemd unit template
+6) Create the p2pool wrapper and systemd unit
 
-The wrapper (created at `/home/user0/Github/p2pool/contrib/p2pool-run.sh`) exports the LD_LIBRARY_PATH
-pointing at the local OpenSSL and then execs the PyPy binary to run `run_p2pool.py`. The installer also
-places a systemd service template at `/etc/systemd/system/p2pool.service` (copied from
-`contrib/p2pool.service`).
+The wrapper (created at `/home/user0/Github/p2pool/contrib/p2pool-run.sh`) exports `LD_LIBRARY_PATH`
+pointing at the local OpenSSL and execs the PyPy binary. The systemd unit
+(`/etc/systemd/system/p2pool.service`) is generated with the real RPC credentials, network, and
+payout address already embedded in `ExecStart` — collected either interactively or from CLI flags.
 
-Important: before starting the service, replace the placeholder RPC credentials and set an explicit
-payout address (without the `bitcoincash:` prefix) in the unit or better, in a drop-in override `
-/etc/systemd/system/p2pool.service.d/override.conf` like:
-
-```ini
-[Service]
-ExecStart=
-ExecStart=/home/user0/Github/p2pool/contrib/p2pool-run.sh --net bitcoincash --address <YOUR_ADDR> <rpcuser> <rpcpassword>
-```
-
-Then reload systemd and restart the service:
+If you ran the installer with `--yes` and left `--rpc-pass` empty, the password will be missing from
+the `ExecStart` line. In that case add a drop-in override:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl restart p2pool.service
+sudo systemctl edit p2pool.service
+# Paste:
+# [Service]
+# ExecStart=
+# ExecStart=/home/user0/Github/p2pool/contrib/p2pool-run.sh --net bitcoincash \
+#   --address YOUR_ADDR bitcoinrpc YOURPASS
+```
+
+Then start the service:
+
+```bash
+sudo systemctl start p2pool.service
 sudo journalctl -u p2pool.service -n 200 --no-pager
 ```
 
@@ -196,10 +206,10 @@ Notes on upgrade and cleanup
 - To remove the local OpenSSL, delete the `/home/user0/openssl-1.1` directory (make sure no other process
   depends on it).
 
-If you want, you can copy the contents of `contrib/install_ubuntu_24.04_py2_pypy.sh` and run it on a fresh
-Ubuntu 24.04 machine to reproduce the steps automatically. Remember to edit the installed systemd unit or
-create a drop-in override with real RPC credentials and an explicit payout address before allowing the service
-to run in production.
+The easiest way to reproduce the steps above on a fresh Ubuntu 24.04 machine is to run
+`contrib/install_ubuntu_24.04_py2_pypy.sh` interactively. It will prompt for all settings, show a
+summary, and generate a ready-to-run service unit with real credentials embedded. Pass `--yes` to
+skip all prompts and accept defaults (useful for scripted deployments).
 [## Operational additions installed by the automated installer
 
 The included installer now also configures a few operational helpers to make production hosts more robust:

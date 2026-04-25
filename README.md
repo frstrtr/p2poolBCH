@@ -1,21 +1,31 @@
 **Ubuntu 24.04 automated installer (recommended)**
 
-For Ubuntu 24.04 systems, we provide an automated installer script that sets up PyPy2, builds a local OpenSSL 1.1, and configures p2pool with systemd integration. This is the easiest and most reliable method for modern Ubuntu systems.
+For Ubuntu 24.04 systems, we provide an interactive installer script that sets up PyPy2, builds a
+local OpenSSL 1.1, and configures p2pool with systemd integration.
 
-Quick start:
+Quick start (interactive — prompts for all settings):
 
 ```bash
-sudo ./contrib/install_ubuntu_24.04_py2_pypy.sh --user USERNAME \
-  --rpc-host BITCOIND_HOST --rpc-port 8332 \
-  --rpc-user RPCUSER --rpc-pass RPCPASS \
-  --address YOUR_PAYOUT_ADDRESS
+sudo ./contrib/install_ubuntu_24.04_py2_pypy.sh
 ```
 
-The installer automatically:
-- Downloads and installs PyPy2 runtime
-- Builds OpenSSL 1.1 locally for compatibility
-- Installs all Python dependencies
-- Creates systemd service and wrapper script
+Or supply everything on the command line for unattended installs:
+
+```bash
+sudo ./contrib/install_ubuntu_24.04_py2_pypy.sh \
+  --user ubuntu --network bitcoincash \
+  --rpc-host BITCOIND_HOST --rpc-port 8332 \
+  --rpc-user RPCUSER --rpc-pass RPCPASS \
+  --address YOUR_PAYOUT_ADDRESS \
+  --yes
+```
+
+The installer:
+- Asks for all settings interactively (with sensible defaults) and shows a confirmation summary
+- Downloads and installs PyPy2 runtime and builds OpenSSL 1.1 locally
+- Installs all Python dependencies into PyPy
+- Creates `p2pool-run.sh` and a ready-to-use systemd service with real credentials baked in
+- Creates the Telegram bot Python 3 venv and writes `/etc/p2pool-bot.env` if a bot token is provided
 - Configures chrony (time sync), logrotate, and disk-space monitoring
 
 For detailed instructions, troubleshooting, and manual setup steps, see `INSTALL_UBUNTU_24.04_PY2_PYPY.md`.
