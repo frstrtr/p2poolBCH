@@ -29,6 +29,7 @@ The installer:
 - Configures chrony (time sync), logrotate, and disk-space monitoring
 
 For detailed instructions, troubleshooting, and manual setup steps, see `INSTALL_UBUNTU_24.04_PY2_PYPY.md`.
+For Telegram bot setup and usage, see `TELEGRAM_BOT.md`.
 
 ---
 

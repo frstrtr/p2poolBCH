@@ -1,0 +1,234 @@
+# P2Pool BCH — Telegram Notification Bot
+
+The `telegram_bot/` directory contains a Python 3 bot that sends push
+notifications to subscribed miners when pool events occur.
+
+---
+
+## Event types
+
+| Event | Description |
+|---|---|
+| 🟢 **Worker connected** | A miner authenticated via Stratum |
+| 🔴 **Worker disconnected** | A miner's connection was closed |
+| 🔵 **Share found** | A valid share was submitted |
+| 🏆 **Block found** | A block was solved by the pool |
+
+Alerts are matched by **BCH address** — each user registers their address
+and receives only events for that address.
+
+---
+
+## Architecture
+
+```
+p2pool (PyPy2, Twisted)
+  └─ LocalEventPusher  →  POST /event  →  aiohttp server (bot)
+                                                └─ match subscribers by address
+                                                └─ send Telegram messages via PTB
+```
+
+- The bot runs as a **child process of p2pool** when `--run-bot` is used.
+  No separate service is required for typical deployments.
+- The bot binds only to `127.0.0.1` — it is not exposed externally.
+- State (subscriptions) is kept in a single JSON file protected by a file lock.
+
+---
+
+## Quick setup (with the installer)
+
+The installer `contrib/install_ubuntu_24.04_py2_pypy.sh` handles everything
+if you supply a bot token during the interactive session:
+
+1. Creates `<p2pool-dir>/bot-venv/` with all Python 3 dependencies.
+2. Writes `/etc/p2pool-bot.env` (mode 600) with your token and defaults.
+3. Patches `contrib/p2pool-run.sh` to auto-pass `--run-bot` whenever both
+   the venv and the env file are present.
+
+After installation, start p2pool and the bot launches alongside it:
+
+```bash
+sudo systemctl start p2pool.service
+sudo journalctl -u p2pool.service -n 50 --no-pager | grep -i bot
+# Expected: Telegram bot started (PID 12345)
+```
+
+---
+
+## Manual setup
+
+### 1. Create a bot
+
+1. Open Telegram and search for **@BotFather**.
+2. Send `/newbot` and follow the prompts.
+3. Copy the token you receive (format: `123456:ABC-DEF...`).
+
+### 2. Install Python 3 dependencies
+
+```bash
+# from the p2pool root directory
+python3 -m venv bot-venv
+bot-venv/bin/pip install -r telegram_bot/requirements.txt
+```
+
+### 3. Create the environment file
+
+```bash
+sudo install -m 600 -o ubuntu telegram_bot/.env.example /etc/p2pool-bot.env
+sudo nano /etc/p2pool-bot.env
+```
+
+Minimum required content:
+
+```ini
+BOT_TOKEN=123456:ABC-DEF...
+
+# These have sensible defaults — change only if needed:
+LOCAL_EVENT_PORT=9349
+P2POOL_API_URL=http://127.0.0.1:9348
+SUBSCRIPTIONS_FILE=/home/ubuntu/Github/p2pool/telegram_bot/subscriptions.json
+
+# Optional: broadcast every event to a channel (bot must be admin there):
+# BROADCAST_CHANNEL_ID=-1001234567890
+```
+
+### 4. Start the bot (via p2pool)
+
+Pass the extra flags when launching p2pool:
+
+```bash
+pypy run_p2pool.py --net bitcoincash \
+  --run-bot \
+  --bot-python bot-venv/bin/python3 \
+  --bot-env-file /etc/p2pool-bot.env \
+  --node-name mynode \
+  <other p2pool args>
+```
+
+`p2pool-run.sh` does this automatically when `/etc/p2pool-bot.env` exists.
+
+---
+
+## Environment variables reference
+
+| Variable | Default | Required | Description |
+|---|---|---|---|
+| `BOT_TOKEN` | — | **yes** | Telegram bot token from @BotFather |
+| `LOCAL_EVENT_PORT` | `9349` | no | Port the aiohttp event server listens on |
+| `P2POOL_API_URL` | `http://127.0.0.1:9348` | no | p2pool web API base URL |
+| `SUBSCRIPTIONS_FILE` | `telegram_bot/subscriptions.json` | no | Path to subscription store |
+| `BROADCAST_CHANNEL_ID` | (empty) | no | Channel ID for broadcast alerts; bot must be admin |
+
+---
+
+## p2pool CLI flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--run-bot` | (off) | Launch bot as subprocess |
+| `--bot-python PATH` | `python3` | Python 3 interpreter (use venv path) |
+| `--bot-env-file PATH` | (none) | File of `KEY=VALUE` env vars for the bot |
+| `--local-bot-url URL` | `http://127.0.0.1:9349` | Where p2pool POSTs events |
+| `--node-name NAME` | system hostname | Label shown in alert messages |
+
+---
+
+## User interaction (Telegram commands)
+
+Send `/start` to the bot to open the menu. All further interaction uses
+inline buttons — no other commands are needed.
+
+| Action | How |
+|---|---|
+| Set your BCH address | **📝 Set mining address** → type or paste address |
+| Toggle alert types | Buttons for each type flip on/off |
+| View current settings | Shown in the menu message |
+| Unsubscribe | **🗑 Unsubscribe** → confirm |
+
+Addresses are matched exactly. Cashaddr format (`bitcoincash:q...`) and
+legacy format (`1...`) are both accepted.
+
+---
+
+## Broadcast channel
+
+If `BROADCAST_CHANNEL_ID` is set, every event is also sent to that channel
+regardless of per-user subscriptions. Useful for a public announcement
+channel or team monitoring.
+
+Steps to configure:
+1. Create a Telegram channel.
+2. Add the bot as an **administrator** with "Post Messages" permission.
+3. Get the channel ID (forward a message to `@userinfobot`, or use the
+   Bot API `getUpdates` after posting to the channel). Supergroup/channel
+   IDs are negative and start with `-100`.
+4. Set `BROADCAST_CHANNEL_ID=-100xxxxxxxxxx` in `/etc/p2pool-bot.env`.
+5. Restart p2pool.
+
+---
+
+## Standalone mode (without `--run-bot`)
+
+If you prefer to run the bot as its own systemd service (for example, to
+keep it running when p2pool is stopped), use the included unit file:
+
+```bash
+# Adjust User/WorkingDirectory paths in the file first:
+sudo cp telegram_bot/bot.service /etc/systemd/system/p2pool-bot.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now p2pool-bot.service
+sudo journalctl -u p2pool-bot.service -f
+```
+
+In this mode, p2pool must still be started without `--run-bot`, and the
+bot just idles (no events arrive) until p2pool is running.
+
+---
+
+## Troubleshooting
+
+**Bot starts but sends no messages**
+- Confirm `/etc/p2pool-bot.env` has the correct `BOT_TOKEN`.
+- Check that `LOCAL_EVENT_PORT` matches `--local-bot-url` on the p2pool side
+  (default both `9349`).
+- Make sure you `/start`-ed the bot and set a mining address that matches
+  the address p2pool sees in Stratum `authorize`.
+
+**`Telegram bot started` not in p2pool log**
+- The venv check in `p2pool-run.sh` requires `bot-venv/bin/python3` to be
+  executable and `/etc/p2pool-bot.env` to exist. Verify both:
+  ```bash
+  ls -la /home/ubuntu/Github/p2pool/bot-venv/bin/python3
+  ls -la /etc/p2pool-bot.env
+  ```
+
+**`BOT_TOKEN` error / KeyError**
+- The env file must contain `BOT_TOKEN=...` (no spaces around `=`, no quotes).
+
+**`Address already in use` on port 9349**
+- Another process is using the event port. Change `LOCAL_EVENT_PORT` in
+  `/etc/p2pool-bot.env` and pass `--local-bot-url http://127.0.0.1:<port>`
+  to p2pool.
+
+**Subscriptions lost after reinstall**
+- The subscription store is a plain JSON file at `SUBSCRIPTIONS_FILE`.
+  Back it up before reinstalling if you want to preserve subscriptions.
+
+---
+
+## File layout
+
+```
+telegram_bot/
+├── __init__.py
+├── bot.py             # entry point: asyncio loop, aiohttp + PTB
+├── bot.service        # standalone systemd unit (optional)
+├── config.py          # env var loading
+├── event_server.py    # aiohttp POST /event handler
+├── handlers.py        # PTB ConversationHandler (/start, buttons)
+├── keyboards.py       # inline keyboard builders
+├── notifier.py        # send_alert, broadcast_to_channel
+├── requirements.txt   # python-telegram-bot>=20, aiohttp>=3.9, filelock
+├── subscriptions.py   # JSON subscription store with filelock
+└── .env.example       # template for /etc/p2pool-bot.env
+```

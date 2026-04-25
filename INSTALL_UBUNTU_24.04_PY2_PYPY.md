@@ -258,6 +258,8 @@ Security and notes
 The repo includes a Python 3 Telegram bot (`telegram_bot/`) that sends push notifications to
 subscribed miners when workers connect/disconnect, shares are found, or blocks are solved.
 
+For full bot documentation see **[TELEGRAM_BOT.md](TELEGRAM_BOT.md)**.
+
 The bot runs as a **child process of p2pool** — no separate service is needed. The p2pool wrapper
 `contrib/p2pool-run.sh` auto-enables it if two things exist:
 
