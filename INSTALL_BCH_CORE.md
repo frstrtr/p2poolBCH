@@ -57,8 +57,8 @@ rpcpassword=CHANGE_THIS_TO_A_STRONG_PASSWORD
 # Allow p2pool to connect (localhost only)
 rpcallowip=127.0.0.1
 
-# Transaction index (needed for some p2pool features)
-txindex=1
+# Transaction index (needed for some p2pool features) but not now
+txindex=0
 
 # Limit memory usage (adjust to your RAM)
 dbcache=512
