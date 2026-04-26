@@ -22,6 +22,17 @@
 
 set -e
 
+# Exec-passthrough: if the first argument looks like a command (starts with /
+# or is a known binary on PATH), just exec it directly.  This lets CI smoke
+# tests and interactive debugging work without --entrypoint overrides:
+#   docker run IMAGE pypy -c "import twisted; print twisted.__version__"
+#   docker run IMAGE bash
+if [ $# -gt 0 ]; then
+    case "$1" in
+        /*|pypy|python*|bash|sh) exec "$@" ;;
+    esac
+fi
+
 : "${RPC_HOST:?RPC_HOST is required (bitcoind hostname or IP)}"
 : "${RPC_USER:?RPC_USER is required}"
 : "${RPC_PASS:?RPC_PASS is required}"

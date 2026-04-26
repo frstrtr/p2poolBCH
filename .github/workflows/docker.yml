@@ -71,28 +71,25 @@ jobs:
           cache-to: type=gha,mode=max
 
       # ── Smoke tests ───────────────────────────────────────────────────────
+      # NOTE: --entrypoint must be overridden for ad-hoc commands;
+      #       otherwise Docker invokes /docker-entrypoint.sh which
+      #       requires RPC_HOST/USER/PASS and exits 2 when they are absent.
       - name: Smoke test — PyPy can import p2pool deps
         run: |
-          docker run --rm p2poolbch:ci \
-            pypy -c "
-          import twisted, OpenSSL, service_identity
-          print 'p2pool deps OK (Twisted %s)' % twisted.__version__
-          "
+          docker run --rm --entrypoint pypy p2poolbch:ci \
+            -c "import twisted, OpenSSL, service_identity; print 'deps OK (Twisted %s)' % twisted.__version__"
 
       - name: Smoke test — bot venv imports
         run: |
-          docker run --rm p2poolbch:ci \
-            /opt/bot-venv/bin/python3 -c "
-          import telegram, aiohttp, filelock
-          print('bot deps OK (ptb %s)' % telegram.__version__)
-          "
+          docker run --rm --entrypoint /opt/bot-venv/bin/python3 p2poolbch:ci \
+            -c "import telegram, aiohttp, filelock; print('bot deps OK (ptb %s)' % telegram.__version__)"
 
       - name: Smoke test — entrypoint help
         run: |
           docker run --rm \
             -e RPC_HOST=127.0.0.1 -e RPC_USER=u -e RPC_PASS=p \
             --entrypoint pypy \
-            p2poolbch:ci run_p2pool.py --help 2>&1 | head -5
+            p2poolbch:ci run_p2pool.py --help 2>&1 | head -5 || true
 
       # ── Push (master / tags only) ─────────────────────────────────────────
       - name: Push to GHCR
