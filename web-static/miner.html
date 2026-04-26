@@ -1106,7 +1106,7 @@
                     hashLink.className = 'hash-link';
                     hashLink.href = block.explorer_url || '#';
                     hashLink.target = '_blank';
-                    hashLink.textContent = block.block_hash.substring(0, 16) + '...';
+                    hashLink.textContent = '...' + block.block_hash.slice(-12);
                     tdHash.appendChild(hashLink);
                     tr.appendChild(tdHash);
                     

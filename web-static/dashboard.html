@@ -1432,14 +1432,15 @@
                         </div>
                     </div>
                     <div class="graph-legend compact">
-                        <div class="legend-item" data-series="good" onclick="toggleSeries('good', this)" title="Click to toggle Good hashrate"><span class="legend-color" style="background: #008de4;"></span><span>Good</span></div>
-                        <div class="legend-item" data-series="doa" onclick="toggleSeries('doa', this)" title="Click to toggle DOA hashrate"><span class="legend-color" style="background: #ff6b6b;"></span><span>DOA</span></div>
+                        <div class="legend-item disabled" data-series="good" onclick="toggleSeries('good', this)" title="Click to toggle Good hashrate"><span class="legend-color" style="background: #008de4;"></span><span>Good</span></div>
+                        <div class="legend-item disabled" data-series="doa" onclick="toggleSeries('doa', this)" title="Click to toggle DOA hashrate"><span class="legend-color" style="background: #ff6b6b;"></span><span>DOA</span></div>
                         <div class="legend-item" data-series="blocks" onclick="toggleSeries('blocks', this)" title="Click to toggle block markers"><span class="legend-color" style="background: #00ff88;"></span><span>Blocks</span></div>
-                        <div class="legend-item disabled" data-series="workers" onclick="toggleSeries('workers', this)" title="Click to toggle worker connections"><span class="legend-color" style="background: #9c27b0;"></span><span>Workers</span></div>
-                        <div class="legend-item" data-series="miners" onclick="toggleSeries('miners', this)" title="Click to toggle unique miner addresses"><span class="legend-color" style="background: #673ab7;"></span><span>Miners</span></div>
-                        <div class="legend-item" data-series="connected" onclick="toggleSeries('connected', this)" title="Click to toggle connected miners (all connections)"><span class="legend-color" style="background: #e91e63;"></span><span>Connected</span></div>
+                        <div class="legend-item disabled" data-series="workers" onclick="toggleSeries('workers', this)" title="Workers: total worker connections submitting shares"><span class="legend-color" style="background: #9c27b0;"></span><span>Workers</span></div>
+                        <div class="legend-item" data-series="miners" onclick="toggleSeries('miners', this)" title="Miners: unique payout addresses"><span class="legend-color" style="background: #673ab7;"></span><span>Miners</span></div>
+                        <div class="legend-item" data-series="connected" onclick="toggleSeries('connected', this)" title="Connected: live stratum connections from all workers"><span class="legend-color" style="background: #e91e63;"></span><span>Connected</span></div>
                         <div class="legend-item" data-series="lucktrend" onclick="toggleSeries('lucktrend', this)" title="Click to toggle luck trend line"><span class="legend-color" style="background: #ffc107;"></span><span>Luck</span></div>
                         <div class="legend-item disabled" data-series="netdiff" onclick="toggleSeries('netdiff', this)" title="Click to toggle network difficulty"><span class="legend-color" style="background: #8b5cf6;"></span><span>Net Diff</span></div>
+                        <div class="legend-item" data-series="local" onclick="toggleSeries('local', this)" title="Local hashrate from this node's miners"><span class="legend-color" style="background: #4caf50;"></span><span>Local</span></div>
                     </div>
                     <div class="graph-container compact" id="hashrate-graph"></div>
                     <div class="graph-stats compact">
@@ -1447,6 +1448,7 @@
                         <div class="graph-stat"><div class="graph-stat-label">Average</div><div class="graph-stat-value" id="graph-average">-</div></div>
                         <div class="graph-stat"><div class="graph-stat-label">Peak</div><div class="graph-stat-value" id="graph-peak">-</div></div>
                         <div class="graph-stat" title="Worker connections / Unique payout addresses"><div class="graph-stat-label">Workers/Miners</div><div class="graph-stat-value" id="graph-miners">-</div></div>
+                        <div class="graph-stat" title="Current local hashrate from this node's miners"><div class="graph-stat-label" style="color: #4caf50;">Local</div><div class="graph-stat-value" id="graph-local" style="color: #4caf50;">-</div></div>
                         <div class="graph-stat"><div class="graph-stat-label">Avg Luck</div><div class="graph-stat-value" id="graph-luck">-</div></div>
                     </div>
                 </div>
@@ -1464,13 +1466,15 @@
                     <button class="time-btn" data-period="month" onclick="selectGraphPeriod('month')">1M</button>
                     <button class="time-btn" data-period="year" onclick="selectGraphPeriod('year')">1Y</button>
                     <span style="margin: 0 15px; color: var(--text-muted);">|</span>
-                    <div class="legend-item" data-series="good" onclick="toggleSeries('good', this)" title="Click to toggle Good hashrate" style="font-size: 14px; padding: 6px 12px;"><span class="legend-color" style="background: #008de4; width: 14px; height: 14px;"></span><span>Good</span></div>
-                    <div class="legend-item" data-series="doa" onclick="toggleSeries('doa', this)" title="Click to toggle DOA hashrate" style="font-size: 14px; padding: 6px 12px;"><span class="legend-color" style="background: #ff6b6b; width: 14px; height: 14px;"></span><span>DOA</span></div>
+                    <div class="legend-item disabled" data-series="good" onclick="toggleSeries('good', this)" title="Click to toggle Good hashrate" style="font-size: 14px; padding: 6px 12px;"><span class="legend-color" style="background: #008de4; width: 14px; height: 14px;"></span><span>Good</span></div>
+                    <div class="legend-item disabled" data-series="doa" onclick="toggleSeries('doa', this)" title="Click to toggle DOA hashrate" style="font-size: 14px; padding: 6px 12px;"><span class="legend-color" style="background: #ff6b6b; width: 14px; height: 14px;"></span><span>DOA</span></div>
                     <div class="legend-item" data-series="blocks" onclick="toggleSeries('blocks', this)" title="Click to toggle block markers" style="font-size: 14px; padding: 6px 12px;"><span class="legend-color" style="background: #00ff88; width: 14px; height: 14px;"></span><span>Blocks</span></div>
-                    <div class="legend-item disabled" data-series="workers" onclick="toggleSeries('workers', this)" title="Click to toggle worker connections" style="font-size: 14px; padding: 6px 12px;"><span class="legend-color" style="background: #9c27b0; width: 14px; height: 14px;"></span><span>Workers</span></div>
-                    <div class="legend-item" data-series="miners" onclick="toggleSeries('miners', this)" title="Click to toggle unique miner addresses" style="font-size: 14px; padding: 6px 12px;"><span class="legend-color" style="background: #673ab7; width: 14px; height: 14px;"></span><span>Miners</span></div>
+                    <div class="legend-item disabled" data-series="workers" onclick="toggleSeries('workers', this)" title="Workers: total worker connections submitting shares" style="font-size: 14px; padding: 6px 12px;"><span class="legend-color" style="background: #9c27b0; width: 14px; height: 14px;"></span><span>Workers</span></div>
+                    <div class="legend-item" data-series="miners" onclick="toggleSeries('miners', this)" title="Miners: unique payout addresses" style="font-size: 14px; padding: 6px 12px;"><span class="legend-color" style="background: #673ab7; width: 14px; height: 14px;"></span><span>Miners</span></div>
+                    <div class="legend-item" data-series="connected" onclick="toggleSeries('connected', this)" title="Connected: live stratum connections from all workers" style="font-size: 14px; padding: 6px 12px;"><span class="legend-color" style="background: #e91e63; width: 14px; height: 14px;"></span><span>Connected</span></div>
                     <div class="legend-item" data-series="lucktrend" onclick="toggleSeries('lucktrend', this)" title="Click to toggle luck trend line" style="font-size: 14px; padding: 6px 12px;"><span class="legend-color" style="background: #ffc107; width: 14px; height: 14px;"></span><span>Luck</span></div>
                     <div class="legend-item disabled" data-series="netdiff" onclick="toggleSeries('netdiff', this)" title="Click to toggle network difficulty" style="font-size: 14px; padding: 6px 12px;"><span class="legend-color" style="background: #8b5cf6; width: 14px; height: 14px;"></span><span>Net Diff</span></div>
+                    <div class="legend-item" data-series="local" onclick="toggleSeries('local', this)" title="Local hashrate from this node's miners" style="font-size: 14px; padding: 6px 12px;"><span class="legend-color" style="background: #4caf50; width: 14px; height: 14px;"></span><span>Local</span></div>
                 </div>
                 <button class="fullscreen-close" onclick="toggleGraphFullscreen()">✕ Close</button>
             </div>
@@ -1480,6 +1484,7 @@
                 <div class="fullscreen-stat"><div class="fullscreen-stat-label">Average</div><div class="fullscreen-stat-value" id="fs-graph-average">-</div></div>
                 <div class="fullscreen-stat"><div class="fullscreen-stat-label">Peak</div><div class="fullscreen-stat-value" id="fs-graph-peak">-</div></div>
                 <div class="fullscreen-stat" title="Worker connections / Unique payout addresses"><div class="fullscreen-stat-label">Workers/Miners</div><div class="fullscreen-stat-value" id="fs-graph-miners">-</div></div>
+                <div class="fullscreen-stat" title="Current local hashrate from this node's miners"><div class="fullscreen-stat-label" style="color: #4caf50;">Local</div><div class="fullscreen-stat-value" id="fs-graph-local" style="color: #4caf50;">-</div></div>
                 <div class="fullscreen-stat"><div class="fullscreen-stat-label">Avg Luck</div><div class="fullscreen-stat-value" id="fs-graph-luck">-</div></div>
             </div>
         </div>
@@ -1795,6 +1800,8 @@
         }
         
         function format_hashrate(h) {
+            if (h >= 1e21) return d3.format('.2f')(h/1e21) + ' ZH/s';
+            if (h >= 1e18) return d3.format('.2f')(h/1e18) + ' EH/s';
             if (h >= 1e15) return d3.format('.2f')(h/1e15) + ' PH/s';
             if (h >= 1e12) return d3.format('.2f')(h/1e12) + ' TH/s';
             if (h >= 1e9) return d3.format('.2f')(h/1e9) + ' GH/s';
@@ -3135,7 +3142,7 @@
                 tr.append('td')
                     .text(function(b) {
                         if (!b.network_difficulty) return '-';
-                        var hashrate = Math.floor(b.network_difficulty * Math.pow(2, 32) / 150);
+                        var hashrate = Math.floor(b.network_difficulty * Math.pow(2, 32) / (parentBlockPeriodMs/1000));
                         return format_hashrate(hashrate);
                     })
                     .attr('title', function(b) {
@@ -3146,7 +3153,7 @@
                 tr.append('td')
                     .text(function(b) {
                         if (!b.actual_hash_difficulty) return '-';
-                        var hashrate = Math.floor(b.actual_hash_difficulty * Math.pow(2, 32) / 150);
+                        var hashrate = Math.floor(b.actual_hash_difficulty * Math.pow(2, 32) / (parentBlockPeriodMs/1000));
                         return format_hashrate(hashrate);
                     })
                     .attr('title', function(b) {
@@ -3439,10 +3446,12 @@
                 // Current round luck (current luck trend)
                 if (luckData.current_luck_trend) {
                     var currentLuck = luckData.current_luck_trend;
+                    graphCurrentLuckTrend = currentLuck; // Store for chart trendline
                     d3.select('#luck_current_round')
                         .text('Round: ' + d3.format('.0f')(currentLuck) + '%')
                         .style('background', currentLuck >= 100 ? 'var(--success)' : (currentLuck >= 75 ? 'var(--warning)' : 'var(--danger)'));
                 } else {
+                    graphCurrentLuckTrend = null;
                     d3.select('#luck_current_round').text('Round: -').style('background', 'var(--primary)');
                 }
 
@@ -4247,9 +4256,12 @@
         var graphUniqueMinersData = [];
         var graphBlocks = [];
         var graphNetworkDiffData = [];
+        var graphLocalHashrateData = [];
+        var graphConnectedMinersData = [];
+        var graphCurrentLuckTrend = null; // Current round luck from backend (share-based)
         var isFullscreen = false;
         var fullscreenChart = null;
-        var seriesVisibility = { good: true, doa: true, blocks: true, workers: false, miners: true, connected: true, lucktrend: true, netdiff: false };
+        var seriesVisibility = { good: false, doa: false, blocks: true, workers: false, miners: true, connected: true, lucktrend: true, netdiff: false, local: true };
         
         function toggleSeries(seriesName, element) {
             seriesVisibility[seriesName] = !seriesVisibility[seriesName];
@@ -4263,8 +4275,8 @@
                 }
             });
             
-            // Map series names to indices (order: good, doa, blocks, workers, miners, connected, lucktrend, netdiff)
-            var seriesIndexMap = { good: 0, doa: 1, blocks: 2, workers: 3, miners: 4, connected: 5, lucktrend: 6, netdiff: 7 };
+            // Map series names to indices (order: good, doa, blocks, workers, miners, connected, lucktrend, netdiff, local)
+            var seriesIndexMap = { good: 0, doa: 1, blocks: 2, workers: 3, miners: 4, connected: 5, lucktrend: 6, netdiff: 7, local: 8 };
             var seriesIndex = seriesIndexMap[seriesName];
             
             if (hashrateChart && hashrateChart.series[seriesIndex]) {
@@ -4292,7 +4304,7 @@
                 overlay.classList.add('active');
                 document.body.style.overflow = 'hidden';
                 // Render fullscreen chart
-                renderFullscreenGraph(graphData, graphMinerData, graphUniqueMinersData, graphConnectedMinersData, graphBlocks, graphNetworkDiffData);
+                renderFullscreenGraph(graphData, graphMinerData, graphUniqueMinersData, graphConnectedMinersData, graphBlocks, graphNetworkDiffData, graphLocalHashrateData);
                 // Update button states
                 updatePeriodButtons();
             } else {
@@ -4334,19 +4346,21 @@
             var hashrateData = null;
             var minerCountData = null;
             var connectedMinersData = null;
+            var localHashrateData = null;
             var blocksData = [];
             var networkDiffData = [];
             
             function tryRender() {
                 loadCount++;
-                if (loadCount === 6) {  // Loading 6 resources: hashrate, worker_count, unique_miner_count, connected_miners, blocks, network_difficulty
+                if (loadCount === 8) {  // Loading 8 resources: hashrate, local_hash_rate, worker_count, unique_miner_count, connected_miners, blocks, network_difficulty, luck_stats
                     graphData = hashrateData;
                     graphMinerData = minerCountData;
                     graphUniqueMinersData = uniqueMinerCountData;
                     graphConnectedMinersData = connectedMinersData;
+                    graphLocalHashrateData = localHashrateData;
                     graphBlocks = blocksData;
                     graphNetworkDiffData = networkDiffData;
-                    renderHashrateGraph(hashrateData, minerCountData, uniqueMinerCountData, connectedMinersData, blocksData, networkDiffData);
+                    renderHashrateGraph(hashrateData, minerCountData, uniqueMinerCountData, connectedMinersData, blocksData, networkDiffData, localHashrateData);
                 }
             }
             
@@ -4407,6 +4421,26 @@
             
             d3.json('../network_difficulty?period=' + currentGraphPeriod, function(data) {
                 networkDiffData = data || [];
+                tryRender();
+            });
+            
+            var localHashrateEndpoints = {
+                'hour': '../web/graph_data/local_hash_rate/last_hour',
+                'day': '../web/graph_data/local_hash_rate/last_day',
+                'week': '../web/graph_data/local_hash_rate/last_week',
+                'month': '../web/graph_data/local_hash_rate/last_month',
+                'year': '../web/graph_data/local_hash_rate/last_year'
+            };
+            
+            d3.json(localHashrateEndpoints[currentGraphPeriod], function(data) {
+                localHashrateData = data || [];
+                tryRender();
+            });
+            
+            d3.json('../luck_stats', function(luckData) {
+                if (luckData && luckData.current_luck_trend) {
+                    graphCurrentLuckTrend = luckData.current_luck_trend;
+                }
                 tryRender();
             });
         }
@@ -4499,12 +4533,13 @@
             });
         }
 
-        function renderHashrateGraph(data, minerData, uniqueMinersData, connectedData, blocks, networkDiffSamples) {
+        function renderHashrateGraph(data, minerData, uniqueMinersData, connectedData, blocks, networkDiffSamples, localHashrateRawData) {
             var container = document.getElementById('hashrate-graph');
             blocks = blocks || [];
             minerData = minerData || [];
             uniqueMinersData = uniqueMinersData || [];
             connectedData = connectedData || [];
+            localHashrateRawData = localHashrateRawData || [];
             
             // Debug: log blocks info
             console.log('renderHashrateGraph - Blocks received:', blocks.length);
@@ -4524,6 +4559,7 @@
             // Parse data - d[1] is an object {good: x, orphan: y, null: z} or null
             var hashrate = [];
             var doarate = [];
+            var localHashrate = [];
             var minerCount = [];
             var connectedCount = [];
             var values = [];
@@ -4544,6 +4580,14 @@
                 doarate.push([timestamp, doaVal]);
                 values.push(goodVal);
                 doaValues.push(doaVal);
+            });
+            
+            // Parse local hash rate data
+            localHashrateRawData.forEach(function(d) {
+                var timestamp = d[0] * 1000;
+                if (timestamp >= minTime && timestamp <= maxTime) {
+                    localHashrate.push([timestamp, d[1] || 0]);
+                }
             });
             
             // Parse worker count data (total worker connections)
@@ -4591,7 +4635,7 @@
             networkDiffSamples.forEach(function(sample) {
                 var sampleTime = sample.ts * 1000;
                 // Don't filter - backend already provides correctly bounded data with gap filling
-                var netHashrate = sample.network_diff * Math.pow(2, 32) / 150; // 150s avg block time for Dash
+                var netHashrate = sample.network_diff * Math.pow(2, 32) / (parentBlockPeriodMs/1000);
                 netDiffData.push([sampleTime, netHashrate]);
             });
             console.log('Net Diff data points:', netDiffData.length);
@@ -4604,33 +4648,17 @@
                 
                 // Check if block is within selected time window (exact range for alignment)
                 if (blockTime >= minTime && blockTime <= maxTime) {
-                    // For luck trend, collect blocks with luck data within time window
+                    // For luck trend: collect block luck values within time window
                     if (b.luck !== undefined && b.luck !== null) {
                         luckTrendData.push([blockTime, b.luck]);
                         validLucks.push(b.luck);
                     }
                     
-                    // Find closest hashrate value for y position
-                    var closestIdx = 0;
-                    var closestDiff = Math.abs(data[0][0] * 1000 - blockTime);
-                    for (var i = 1; i < data.length; i++) {
-                        var diff = Math.abs(data[i][0] * 1000 - blockTime);
-                        if (diff < closestDiff) {
-                            closestDiff = diff;
-                            closestIdx = i;
-                        }
-                    }
-                    var yVal = (data[closestIdx][1] && data[closestIdx][1].good) ? data[closestIdx][1].good : 0;
-                    // Use a minimum y value so block is visible even if hashrate is 0
-                    if (yVal === 0 && values.length > 0) {
-                        yVal = Math.max.apply(null, values) * 0.1 || 1000000000;
-                    }
-                    
-                    // Position block higher based on difficulty ratio (softer elevation using square root)
-                    if (b.actual_hash_difficulty && b.network_difficulty && b.network_difficulty > 0) {
-                        var diffRatio = b.actual_hash_difficulty / b.network_difficulty;
-                        var heightMultiplier = 1 + (Math.sqrt(diffRatio) - 1) * 0.5;
-                        yVal = yVal * heightMultiplier;
+                    // Blocks use a normalized y-axis (0-1) — decoupled from hashrate scale.
+                    // Good luck: 0.85, poor luck (<75%): 0.70
+                    var yVal = 0.85;
+                    if (b.luck !== undefined && b.luck !== null && b.luck < 75) {
+                        yVal = 0.70;
                     }
                     
                     // Determine color based on luck
@@ -4655,9 +4683,7 @@
             });
             
             // Interpolate luck trend to align with hashrate time boundaries
-            // Use exponential decay toward 0 after the last known block luck,
-            // based on target block time from currency_info. This reflects rising expected work
-            // with no found block: luck drifts down as time passes without a hit.
+            // Use current round luck at maxTime endpoint to correctly show ongoing round progress.
             var targetBlockTimeMs = parentBlockPeriodMs; // from currency_info
             if (luckTrendData.length > 0) {
                 // Sort by time
@@ -4667,31 +4693,43 @@
                 if (luckTrendData[0][0] > minTime && sortedBlocks.length > 0) {
                     // Find the last block before minTime for interpolation
                     var prevBlock = null;
+                    // Also find the earliest block in the window (even if luck=null — it marks the round start)
+                    var firstBlockInWindow = null;
                     for (var i = 0; i < sortedBlocks.length; i++) {
                         var bt = sortedBlocks[i].ts * 1000;
                         if (bt < minTime && sortedBlocks[i].luck) {
                             prevBlock = sortedBlocks[i];
-                        } else if (bt >= minTime) {
-                            break;
+                        } else if (bt >= minTime && bt <= maxTime && firstBlockInWindow === null) {
+                            firstBlockInWindow = sortedBlocks[i];
                         }
                     }
+                    // Start time: use earliest block in window (even luck=null), fallback to first luck point
+                    var startTime = firstBlockInWindow ? firstBlockInWindow.ts * 1000 - 1 : luckTrendData[0][0] - 1;
                     
                     if (prevBlock) {
-                        // Use the previous block's luck value at minTime
-                        luckTrendData.unshift([minTime, prevBlock.luck]);
+                        // Decay from 100% at prevBlock's time to the round-start time
+                        var decayToMin = Math.exp(-(startTime - prevBlock.ts * 1000) / targetBlockTimeMs);
+                        luckTrendData.unshift([startTime, 100 * decayToMin]);
                     } else {
-                        // No previous block, use first point's value at minTime
-                        luckTrendData.unshift([minTime, luckTrendData[0][1]]);
+                        // No previous block known — insert 100% just before the earliest block in window
+                        luckTrendData.unshift([startTime, 100]);
                     }
                 }
                 
-                // Add interpolated point at maxTime with exponential decay toward 0
+                // Add point at maxTime using actual current luck (backend share-based, or time-based estimate)
                 if (luckTrendData[luckTrendData.length - 1][0] < maxTime) {
                     var lastTime = luckTrendData[luckTrendData.length - 1][0];
-                    var lastLuckVal = luckTrendData[luckTrendData.length - 1][1];
-                    var decay = Math.exp(-(maxTime - lastTime) / targetBlockTimeMs);
-                    var decayedLuck = lastLuckVal * decay;
-                    luckTrendData.push([maxTime, decayedLuck]);
+                    var elapsedMs = maxTime - lastTime;
+                    var currentRoundLuck;
+                    if (graphCurrentLuckTrend !== null && graphCurrentLuckTrend > 0) {
+                        currentRoundLuck = graphCurrentLuckTrend;
+                    } else if (elapsedMs > 0 && targetBlockTimeMs > 0) {
+                        currentRoundLuck = 100 * targetBlockTimeMs / elapsedMs;
+                    } else {
+                        currentRoundLuck = 100;
+                    }
+                    luckTrendData.push([maxTime, currentRoundLuck]);
+                    validLucks.push(currentRoundLuck); // Include current round in avg luck
                 }
             } else if (luckTrendData.length === 0 && sortedBlocks.length > 0) {
                 // Edge case: No blocks in time window, but blocks exist before it
@@ -4706,11 +4744,15 @@
                 }
                 
                 if (lastBlockBeforeWindow) {
-                    // Draw line from minTime to maxTime with exponential decay toward 0
-                    var lastLuck = lastBlockBeforeWindow.luck;
-                    luckTrendData.push([minTime, lastLuck]);
-                    var decay = Math.exp(-(maxTime - minTime) / targetBlockTimeMs);
-                    luckTrendData.push([maxTime, lastLuck * decay]);
+                    // Use time-based luck estimate: 100% * targetBlockTime / elapsedTime
+                    var refTs = lastBlockBeforeWindow.ts * 1000;
+                    var luckAtMin = (minTime > refTs && targetBlockTimeMs > 0) ? 100 * targetBlockTimeMs / (minTime - refTs) : 100;
+                    var luckAtMax = (graphCurrentLuckTrend !== null && graphCurrentLuckTrend > 0)
+                        ? graphCurrentLuckTrend
+                        : ((maxTime > refTs && targetBlockTimeMs > 0) ? 100 * targetBlockTimeMs / (maxTime - refTs) : 100);
+                    luckTrendData.push([minTime, luckAtMin]);
+                    luckTrendData.push([maxTime, luckAtMax]);
+                    validLucks.push(luckAtMax); // Include current round in avg luck
                 }
             }
             
@@ -4775,30 +4817,29 @@
             var avg = values.length > 0 ? sum / values.length : 0;
             var peak = Math.max.apply(null, values) || 0;
             
-            // Calculate average luck from blocks within exact time range
-            var avgLuck = validLucks.length > 0 ? 
-                validLucks.reduce(function(a, b) { return a + b; }, 0) / validLucks.length : null;
+            // Calculate average luck using harmonic mean (total_expected / total_actual = true avg luck)
+            // Harmonic mean of luck% values: n / sum(1/luck_i) * 100
+            // This correctly represents "if pool mined N blocks, what fraction of expected work did it do?"
+            var avgLuck = null;
+            if (validLucks.length > 0) {
+                var sumReciprocals = validLucks.reduce(function(a, b) { return a + 100.0 / b; }, 0);
+                avgLuck = validLucks.length * 100.0 / sumReciprocals;
+            }
             
             document.getElementById('graph-current').textContent = format_hashrate(current);
             document.getElementById('graph-average').textContent = format_hashrate(avg);
             document.getElementById('graph-peak').textContent = format_hashrate(peak);
             
             // Display current worker count and unique miner count
-            var currentWorkerCount = minerCount.length > 0 ? minerCount[minerCount.length - 1][1] : 0;
+            // Data is newest-first, so index 0 = most recent value
+            var currentWorkerCount = minerCount.length > 0 ? minerCount[0][1] : 0;
             currentWorkerCount = (currentWorkerCount === null || currentWorkerCount === undefined) ? 0 : Math.round(currentWorkerCount);
-            var uniqueMiners = [];
-            if (uniqueMinerCountData && uniqueMinerCountData.length > 0) {
-                for (var i = 0; i < uniqueMinerCountData.length; i++) {
-                    var timestamp = uniqueMinerCountData[i][0] * 1000;
-                    var count = uniqueMinerCountData[i][1];
-                    if (timestamp >= minTime && timestamp <= maxTime) {
-                        uniqueMiners.push([timestamp, count]);
-                    }
-                }
-            }
-            var currentUniqueMinerCount = uniqueMiners.length > 0 ? uniqueMiners[uniqueMiners.length - 1][1] : 0;
+            var currentUniqueMinerCount = uniqueMinerCount.length > 0 ? uniqueMinerCount[0][1] : 0;
             currentUniqueMinerCount = (currentUniqueMinerCount === null || currentUniqueMinerCount === undefined) ? 0 : Math.round(currentUniqueMinerCount);
             document.getElementById('graph-miners').textContent = currentWorkerCount + '/' + currentUniqueMinerCount;
+            // Display current local hashrate
+            var currentLocalHashrate = localHashrate.length > 0 ? localHashrate[0][1] : 0;
+            document.getElementById('graph-local').textContent = currentLocalHashrate > 0 ? format_hashrate(currentLocalHashrate) : '-';
             
             if (avgLuck !== null) {
                 var luckEl = document.getElementById('graph-luck');
@@ -4856,7 +4897,20 @@
                         style: { color: '#e0e0e0', fontSize: '10px', width: '50px' },
                         align: 'right',
                         overflow: 'justify',
-                        formatter: function() { return format_hashrate(this.value); }
+                        formatter: function() {
+                            var max = this.axis.max || 1;
+                            var divisor, suffix;
+                            if (max >= 1e21) { divisor = 1e21; suffix = ' ZH/s'; }
+                            else if (max >= 1e18) { divisor = 1e18; suffix = ' EH/s'; }
+                            else if (max >= 1e15) { divisor = 1e15; suffix = ' PH/s'; }
+                            else if (max >= 1e12) { divisor = 1e12; suffix = ' TH/s'; }
+                            else if (max >= 1e9)  { divisor = 1e9;  suffix = ' GH/s'; }
+                            else if (max >= 1e6)  { divisor = 1e6;  suffix = ' MH/s'; }
+                            else if (max >= 1e3)  { divisor = 1e3;  suffix = ' KH/s'; }
+                            else                  { divisor = 1;    suffix = ' H/s';  }
+                            var v = this.value / divisor;
+                            return (v === 0 ? '0' : d3.format('.2f')(v)) + suffix;
+                        }
                     },
                     gridLineColor: '#2a2a4a',
                     opposite: false
@@ -4914,6 +4968,15 @@
                     },
                     gridLineWidth: 0,
                     opposite: true
+                }, {
+                    // Normalized axis for block markers (0-1) — never affects hashrate scale
+                    title: { text: null },
+                    min: 0,
+                    max: 1,
+                    labels: { enabled: false },
+                    gridLineWidth: 0,
+                    tickLength: 0,
+                    opposite: false
                 }],
                 tooltip: {
                     shared: true,
@@ -4941,13 +5004,13 @@
                                 s += 'Expected: <b>' + format_dt(b.expected_time) + '</b><br/>';
                             }
                             if (b.network_difficulty) {
-                                var netHashrate = Math.floor(b.network_difficulty * Math.pow(2, 32) / 150);
+                                var netHashrate = Math.floor(b.network_difficulty * Math.pow(2, 32) / (parentBlockPeriodMs/1000));
                                 var netPdiff = b.network_difficulty * 65536;
                                 s += 'Net Diff: <b style="color:#8888ff">' + format_hashrate(netHashrate) + '</b><br/>';
                                 s += '<span style="font-size:10px;color:#aaa">(bdiff: ' + d3.format(',.2f')(b.network_difficulty) + ', pdiff: ' + d3.format('.2e')(netPdiff) + ')</span><br/>';
                             }
                             if (b.actual_hash_difficulty) {
-                                var actualHashrate = Math.floor(b.actual_hash_difficulty * Math.pow(2, 32) / 150);
+                                var actualHashrate = Math.floor(b.actual_hash_difficulty * Math.pow(2, 32) / (parentBlockPeriodMs/1000));
                                 var actualPdiff = b.actual_hash_difficulty * 65536;
                                 s += 'Hash Diff: <b style="color:#00d4ff">' + format_hashrate(actualHashrate) + '</b><br/>';
                                 s += '<span style="font-size:10px;color:#aaa">(bdiff: ' + d3.format(',.2f')(b.actual_hash_difficulty) + ', pdiff: ' + d3.format('.2e')(actualPdiff) + ')</span><br/>';
@@ -4976,8 +5039,11 @@
                             if (point.series.name === 'Hashrate') goodVal = point.y;
                             if (point.series.name === 'Dead on arrival') doaVal = point.y;
                             if (point.series.name === 'Luck Trend') {
+                                var dy = point.y;
+                                var realLuck = dy <= 100 ? dy : 100 + 100 * (Math.pow(10, (dy - 100) / 100) - 1);
+                                var luckLabel = realLuck > 1000 ? (realLuck / 1000).toFixed(1) + 'k%' : d3.format('.0f')(realLuck) + '%';
                                 s += '<br/><span style="color:' + point.color + '">●</span> ' + 
-                                     point.series.name + ': <b>' + d3.format('.0f')(point.y) + '%</b>';
+                                     point.series.name + ': <b>' + luckLabel + '</b>';
                             } else if (point.series.name === 'Workers' || point.series.name === 'Miners' || point.series.name === 'Connected') {
                                 s += '<br/><span style="color:' + point.color + '">●</span> ' + 
                                      point.series.name + ': <b>' + Math.round(point.y) + '</b>';
@@ -5060,7 +5126,7 @@
                     }),
                     color: '#10b981',
                     visible: seriesVisibility.blocks,
-                    yAxis: 0,
+                    yAxis: 3,
                     tooltip: {
                         pointFormatter: function() {
                             var b = this.block;
@@ -5079,13 +5145,13 @@
                                 s += 'Expected: <b>' + format_dt(b.expected_time) + '</b><br/>';
                             }
                             if (b.network_difficulty) {
-                                var netHashrate = Math.floor(b.network_difficulty * Math.pow(2, 32) / 150);
+                                var netHashrate = Math.floor(b.network_difficulty * Math.pow(2, 32) / (parentBlockPeriodMs/1000));
                                 var netPdiff = b.network_difficulty * 65536;
                                 s += 'Net Diff: <b style="color:#8888ff">' + format_hashrate(netHashrate) + '</b><br/>';
                                 s += '<span style="font-size:10px;color:#aaa">(bdiff: ' + d3.format(',.2f')(b.network_difficulty) + ', pdiff: ' + d3.format('.2e')(netPdiff) + ')</span><br/>';
                             }
                             if (b.actual_hash_difficulty) {
-                                var actualHashrate = Math.floor(b.actual_hash_difficulty * Math.pow(2, 32) / 150);
+                                var actualHashrate = Math.floor(b.actual_hash_difficulty * Math.pow(2, 32) / (parentBlockPeriodMs/1000));
                                 var actualPdiff = b.actual_hash_difficulty * 65536;
                                 s += 'Hash Diff: <b style="color:#00d4ff">' + format_hashrate(actualHashrate) + '</b><br/>';
                                 s += '<span style="font-size:10px;color:#aaa">(bdiff: ' + d3.format(',.2f')(b.actual_hash_difficulty) + ', pdiff: ' + d3.format('.2e')(actualPdiff) + ')</span><br/>';
@@ -5157,20 +5223,37 @@
                     },
                     visible: seriesVisibility.netdiff,
                     yAxis: 0
+                }, {
+                    type: 'area',
+                    name: 'Local',
+                    data: localHashrate,
+                    color: '#4caf50',
+                    lineColor: '#4caf50',
+                    fillColor: {
+                        linearGradient: { x1: 0, y1: 0, x2: 0, y2: 1 },
+                        stops: [
+                            [0, 'rgba(76, 175, 80, 0.55)'],
+                            [1, 'rgba(76, 175, 80, 0.08)']
+                        ]
+                    },
+                    lineWidth: 2,
+                    visible: seriesVisibility.local,
+                    yAxis: 0
                 }]
             });
             
             // Also update fullscreen if open
             if (isFullscreen) {
-                renderFullscreenGraph(data, minerData, uniqueMinersData, connectedData, blocks, networkDiffSamples);
+                renderFullscreenGraph(data, minerData, uniqueMinersData, connectedData, blocks, networkDiffSamples, localHashrateRawData);
             }
         }
         
-        function renderFullscreenGraph(data, minerData, uniqueMinersData, connectedData, blocks, networkDiffSamples) {
+        function renderFullscreenGraph(data, minerData, uniqueMinersData, connectedData, blocks, networkDiffSamples, localHashrateRawData) {
             var container = document.getElementById('fullscreen-graph');
             blocks = blocks || graphBlocks || [];
             minerData = minerData || [];
             connectedData = connectedData || [];
+            localHashrateRawData = localHashrateRawData || graphLocalHashrateData || [];
             
             // Debug: log blocks info
             console.log('renderFullscreenGraph - Blocks received:', blocks.length, 'graphBlocks:', graphBlocks ? graphBlocks.length : 0);
@@ -5188,6 +5271,7 @@
             // Parse data
             var hashrate = [];
             var doarate = [];
+            var localHashrate = [];
             var minerCount = [];
             var connectedCount = [];
             var values = [];
@@ -5210,28 +5294,42 @@
                 doaValues.push(doaVal);
             });
             
-            // Process miner count data (actively mining)
-            minerData.forEach(function(d) {
+            // Parse local hash rate data
+            localHashrateRawData.forEach(function(d) {
                 var timestamp = d[0] * 1000;
-                var count = d[1] || 0;
-                minerCount.push([timestamp, count]);
+                if (timestamp >= minTime && timestamp <= maxTime) {
+                    localHashrate.push([timestamp, d[1] || 0]);
+                }
             });
             
-            // Process unique miner count data
+            // Process miner count data (actively mining) — filter to time range
+            minerData.forEach(function(d) {
+                var timestamp = d[0] * 1000;
+                if (timestamp >= minTime && timestamp <= maxTime) {
+                    var count = d[1] || 0;
+                    minerCount.push([timestamp, count]);
+                }
+            });
+            
+            // Process unique miner count data — filter to time range
             var uniqueMinerCount = [];
             if (uniqueMinersData && uniqueMinersData.length > 0) {
                 uniqueMinersData.forEach(function(d) {
                     var timestamp = d[0] * 1000;
-                    var count = d[1] || 0;
-                    uniqueMinerCount.push([timestamp, count]);
+                    if (timestamp >= minTime && timestamp <= maxTime) {
+                        var count = d[1] || 0;
+                        uniqueMinerCount.push([timestamp, count]);
+                    }
                 });
             }
             
-            // Process connected miners data
+            // Process connected miners data — filter to time range
             connectedData.forEach(function(d) {
                 var timestamp = d[0] * 1000;
-                var count = d[1] || 0;
-                connectedCount.push([timestamp, count]);
+                if (timestamp >= minTime && timestamp <= maxTime) {
+                    var count = d[1] || 0;
+                    connectedCount.push([timestamp, count]);
+                }
             });
             
             // Process blocks - filter to exact time range for proper data alignment
@@ -5245,7 +5343,7 @@
             networkDiffSamples.forEach(function(sample) {
                 var sampleTime = sample.ts * 1000;
                 // Don't filter - backend already provides correctly bounded data with gap filling
-                var netHashrate = sample.network_diff * Math.pow(2, 32) / 150; // 150s avg block time for Dash
+                var netHashrate = sample.network_diff * Math.pow(2, 32) / (parentBlockPeriodMs/1000);
                 netDiffData.push([sampleTime, netHashrate]);
             });
             
@@ -5257,33 +5355,17 @@
                 
                 // Check if block is within selected time window (exact range for alignment)
                 if (blockTime >= minTime && blockTime <= maxTime) {
-                    // For luck trend, collect blocks with luck data within time window
+                    // For luck trend: collect block luck values within time window
                     if (b.luck !== undefined && b.luck !== null) {
                         luckTrendData.push([blockTime, b.luck]);
                         validLucks.push(b.luck);
                     }
                     
-                    // Find closest hashrate value for y position
-                    var closestIdx = 0;
-                    var closestDiff = Math.abs(data[0][0] * 1000 - blockTime);
-                    for (var i = 1; i < data.length; i++) {
-                        var diff = Math.abs(data[i][0] * 1000 - blockTime);
-                        if (diff < closestDiff) {
-                            closestDiff = diff;
-                            closestIdx = i;
-                        }
-                    }
-                    var yVal = (data[closestIdx][1] && data[closestIdx][1].good) ? data[closestIdx][1].good : 0;
-                    // Use a minimum y value so block is visible even if hashrate is 0
-                    if (yVal === 0 && values.length > 0) {
-                        yVal = Math.max.apply(null, values) * 0.1 || 1000000000;
-                    }
-                    
-                    // Position block higher based on difficulty ratio (softer elevation using square root)
-                    if (b.actual_hash_difficulty && b.network_difficulty && b.network_difficulty > 0) {
-                        var diffRatio = b.actual_hash_difficulty / b.network_difficulty;
-                        var heightMultiplier = 1 + (Math.sqrt(diffRatio) - 1) * 0.5;
-                        yVal = yVal * heightMultiplier;
+                    // Blocks use a normalized y-axis (0-1) — decoupled from hashrate scale.
+                    // Good luck: 0.85, poor luck (<75%): 0.70
+                    var yVal = 0.85;
+                    if (b.luck !== undefined && b.luck !== null && b.luck < 75) {
+                        yVal = 0.70;
                     }
                     
                     // Determine color based on luck
@@ -5308,9 +5390,7 @@
             });
             
             // Interpolate luck trend to align with hashrate time boundaries
-            // Use exponential decay toward 0 after the last known block luck,
-            // based on target block time from currency_info. This reflects rising expected work
-            // with no found block: luck drifts down as time passes without a hit.
+            // Use current round luck at maxTime endpoint to correctly show ongoing round progress.
             var targetBlockTimeMs = parentBlockPeriodMs; // from currency_info
             if (luckTrendData.length > 0) {
                 // Sort by time
@@ -5320,31 +5400,43 @@
                 if (luckTrendData[0][0] > minTime && sortedBlocks.length > 0) {
                     // Find the last block before minTime for interpolation
                     var prevBlock = null;
+                    // Also find the earliest block in the window (even if luck=null — it marks the round start)
+                    var firstBlockInWindow = null;
                     for (var i = 0; i < sortedBlocks.length; i++) {
                         var bt = sortedBlocks[i].ts * 1000;
                         if (bt < minTime && sortedBlocks[i].luck) {
                             prevBlock = sortedBlocks[i];
-                        } else if (bt >= minTime) {
-                            break;
+                        } else if (bt >= minTime && bt <= maxTime && firstBlockInWindow === null) {
+                            firstBlockInWindow = sortedBlocks[i];
                         }
                     }
+                    // Start time: use earliest block in window (even luck=null), fallback to first luck point
+                    var startTime = firstBlockInWindow ? firstBlockInWindow.ts * 1000 - 1 : luckTrendData[0][0] - 1;
                     
                     if (prevBlock) {
-                        // Use the previous block's luck value at minTime
-                        luckTrendData.unshift([minTime, prevBlock.luck]);
+                        // Decay from 100% at prevBlock's time to the round-start time
+                        var decayToMin = Math.exp(-(startTime - prevBlock.ts * 1000) / targetBlockTimeMs);
+                        luckTrendData.unshift([startTime, 100 * decayToMin]);
                     } else {
-                        // No previous block, use first point's value at minTime
-                        luckTrendData.unshift([minTime, luckTrendData[0][1]]);
+                        // No previous block known — insert 100% just before the earliest block in window
+                        luckTrendData.unshift([startTime, 100]);
                     }
                 }
                 
-                // Add interpolated point at maxTime with exponential decay toward 0
+                // Add point at maxTime using actual current luck (backend share-based, or time-based estimate)
                 if (luckTrendData[luckTrendData.length - 1][0] < maxTime) {
                     var lastTime = luckTrendData[luckTrendData.length - 1][0];
-                    var lastLuckVal = luckTrendData[luckTrendData.length - 1][1];
-                    var decay = Math.exp(-(maxTime - lastTime) / targetBlockTimeMs);
-                    var decayedLuck = lastLuckVal * decay;
-                    luckTrendData.push([maxTime, decayedLuck]);
+                    var elapsedMs = maxTime - lastTime;
+                    var currentRoundLuck;
+                    if (graphCurrentLuckTrend !== null && graphCurrentLuckTrend > 0) {
+                        currentRoundLuck = graphCurrentLuckTrend;
+                    } else if (elapsedMs > 0 && targetBlockTimeMs > 0) {
+                        currentRoundLuck = 100 * targetBlockTimeMs / elapsedMs;
+                    } else {
+                        currentRoundLuck = 100;
+                    }
+                    luckTrendData.push([maxTime, currentRoundLuck]);
+                    validLucks.push(currentRoundLuck); // Include current round in avg luck
                 }
             } else if (luckTrendData.length === 0 && sortedBlocks.length > 0) {
                 // Edge case: No blocks in time window, but blocks exist before it
@@ -5359,11 +5451,15 @@
                 }
                 
                 if (lastBlockBeforeWindow) {
-                    // Draw line from minTime to maxTime with exponential decay toward 0
-                    var lastLuck = lastBlockBeforeWindow.luck;
-                    luckTrendData.push([minTime, lastLuck]);
-                    var decay = Math.exp(-(maxTime - minTime) / targetBlockTimeMs);
-                    luckTrendData.push([maxTime, lastLuck * decay]);
+                    // Use time-based luck estimate: 100% * targetBlockTime / elapsedTime
+                    var refTs = lastBlockBeforeWindow.ts * 1000;
+                    var luckAtMin = (minTime > refTs && targetBlockTimeMs > 0) ? 100 * targetBlockTimeMs / (minTime - refTs) : 100;
+                    var luckAtMax = (graphCurrentLuckTrend !== null && graphCurrentLuckTrend > 0)
+                        ? graphCurrentLuckTrend
+                        : ((maxTime > refTs && targetBlockTimeMs > 0) ? 100 * targetBlockTimeMs / (maxTime - refTs) : 100);
+                    luckTrendData.push([minTime, luckAtMin]);
+                    luckTrendData.push([maxTime, luckAtMax]);
+                    validLucks.push(luckAtMax); // Include current round in avg luck
                 }
             }
             
@@ -5410,20 +5506,27 @@
             var doaAvg = doaValues.length > 0 ? doaSum / doaValues.length : 0;
             var doaPercent = avg > 0 ? ((doaAvg / (avg + doaAvg)) * 100).toFixed(2) : '0.00';
             
-            // Calculate average luck for fullscreen
-            var fsAvgLuck = validLucks.length > 0 ? 
-                validLucks.reduce(function(a, b) { return a + b; }, 0) / validLucks.length : null;
+            // Calculate average luck for fullscreen (harmonic mean)
+            var fsAvgLuck = null;
+            if (validLucks.length > 0) {
+                var fsSumReciprocals = validLucks.reduce(function(a, b) { return a + 100.0 / b; }, 0);
+                fsAvgLuck = validLucks.length * 100.0 / fsSumReciprocals;
+            }
             
             document.getElementById('fs-graph-current').textContent = format_hashrate(current);
             document.getElementById('fs-graph-average').textContent = format_hashrate(avg);
             document.getElementById('fs-graph-peak').textContent = format_hashrate(peak);
             
             // Display current worker count and unique miner count in fullscreen
-            var fsWorkerCount = minerCount.length > 0 ? minerCount[minerCount.length - 1][1] : 0;
+            // Data is newest-first, so index 0 = most recent value
+            var fsWorkerCount = minerCount.length > 0 ? minerCount[0][1] : 0;
             fsWorkerCount = (fsWorkerCount === null || fsWorkerCount === undefined) ? 0 : Math.round(fsWorkerCount);
-            var fsUniqueMinerCount = uniqueMinerCount.length > 0 ? uniqueMinerCount[uniqueMinerCount.length - 1][1] : 0;
+            var fsUniqueMinerCount = uniqueMinerCount.length > 0 ? uniqueMinerCount[0][1] : 0;
             fsUniqueMinerCount = (fsUniqueMinerCount === null || fsUniqueMinerCount === undefined) ? 0 : Math.round(fsUniqueMinerCount);
             document.getElementById('fs-graph-miners').textContent = fsWorkerCount + '/' + fsUniqueMinerCount;
+            // Display current local hashrate
+            var fsLocalHashrate = localHashrate.length > 0 ? localHashrate[0][1] : 0;
+            document.getElementById('fs-graph-local').textContent = fsLocalHashrate > 0 ? format_hashrate(fsLocalHashrate) : '-';
             
             if (fsAvgLuck !== null) {
                 var luckEl = document.getElementById('fs-graph-luck');
@@ -5467,7 +5570,20 @@
                     tickColor: '#3a3a5a',
                     labels: {
                         style: { color: '#e0e0e0', fontSize: '11px' },
-                        formatter: function() { return format_hashrate(this.value); }
+                        formatter: function() {
+                            var max = this.axis.max || 1;
+                            var divisor, suffix;
+                            if (max >= 1e21) { divisor = 1e21; suffix = ' ZH/s'; }
+                            else if (max >= 1e18) { divisor = 1e18; suffix = ' EH/s'; }
+                            else if (max >= 1e15) { divisor = 1e15; suffix = ' PH/s'; }
+                            else if (max >= 1e12) { divisor = 1e12; suffix = ' TH/s'; }
+                            else if (max >= 1e9)  { divisor = 1e9;  suffix = ' GH/s'; }
+                            else if (max >= 1e6)  { divisor = 1e6;  suffix = ' MH/s'; }
+                            else if (max >= 1e3)  { divisor = 1e3;  suffix = ' KH/s'; }
+                            else                  { divisor = 1;    suffix = ' H/s';  }
+                            var v = this.value / divisor;
+                            return (v === 0 ? '0' : d3.format('.2f')(v)) + suffix;
+                        }
                     },
                     gridLineColor: '#2a2a4a',
                     opposite: false
@@ -5521,6 +5637,15 @@
                     },
                     gridLineWidth: 0,
                     opposite: true
+                }, {
+                    // Normalized axis for block markers (0-1) — never affects hashrate scale
+                    title: { text: null },
+                    min: 0,
+                    max: 1,
+                    labels: { enabled: false },
+                    gridLineWidth: 0,
+                    tickLength: 0,
+                    opposite: false
                 }],
                 tooltip: {
                     shared: true,
@@ -5536,7 +5661,8 @@
                             s += 'Height: <b>' + (b.number || '?') + '</b><br/>';
                             if (b.luck !== undefined && b.luck !== null) {
                                 var luckColor = b.luck >= 100 ? '#00ff88' : (b.luck >= 75 ? '#ffc107' : '#ff6b6b');
-                                s += 'Luck: <b style="color:' + luckColor + '">' + b.luck < 1 ? d3.format('.2f')(b.luck) : d3.format('.0f')(b.luck) + '%</b><br/>';
+                                var luckFormat = b.luck < 1 ? d3.format('.2f')(b.luck) : d3.format('.0f')(b.luck);
+                                s += 'Luck: <b style="color:' + luckColor + '">' + luckFormat + '%</b><br/>';
                             } else if (b.luck_method === 'first_block') {
                                 s += 'Luck: <b style="color:#888">1st block</b><br/>';
                             }
@@ -5547,18 +5673,16 @@
                                 s += 'Expected: <b>' + format_dt(b.expected_time) + '</b><br/>';
                             }
                             if (b.network_difficulty) {
-                                var netHashrate = Math.floor(b.network_difficulty * Math.pow(2, 32) / 150);
+                                var netHashrate = Math.floor(b.network_difficulty * Math.pow(2, 32) / (parentBlockPeriodMs/1000));
                                 var netPdiff = b.network_difficulty * 65536;
                                 s += 'Net Diff: <b style="color:#8888ff">' + format_hashrate(netHashrate) + '</b><br/>';
-                                s += '<span style="font-size:11px;color:#888">(Hashrate needed to solve in 2.5 min)</span><br/>';
-                                s += '<span style="font-size:11px;color:#aaa">bdiff: ' + d3.format(',.2f')(b.network_difficulty) + ', pdiff: ' + d3.format('.2e')(netPdiff) + '</span><br/>';
+                                s += '<span style="font-size:11px;color:#aaa">(bdiff: ' + d3.format(',.2f')(b.network_difficulty) + ', pdiff: ' + d3.format('.2e')(netPdiff) + ')</span><br/>';
                             }
                             if (b.actual_hash_difficulty) {
-                                var actualHashrate = Math.floor(b.actual_hash_difficulty * Math.pow(2, 32) / 150);
+                                var actualHashrate = Math.floor(b.actual_hash_difficulty * Math.pow(2, 32) / (parentBlockPeriodMs/1000));
                                 var actualPdiff = b.actual_hash_difficulty * 65536;
                                 s += 'Hash Diff: <b style="color:#00d4ff">' + format_hashrate(actualHashrate) + '</b><br/>';
-                                s += '<span style="font-size:11px;color:#888">(Hashrate equivalent of found hash)</span><br/>';
-                                s += '<span style="font-size:11px;color:#aaa">bdiff: ' + d3.format(',.2f')(b.actual_hash_difficulty) + ', pdiff: ' + d3.format('.2e')(actualPdiff) + '</span><br/>';
+                                s += '<span style="font-size:11px;color:#aaa">(bdiff: ' + d3.format(',.2f')(b.actual_hash_difficulty) + ', pdiff: ' + d3.format('.2e')(actualPdiff) + ')</span><br/>';
                             }
                             // Show Hash/Net difficulty ratio
                             if (b.actual_hash_difficulty && b.network_difficulty && b.network_difficulty > 0) {
@@ -5584,8 +5708,11 @@
                             if (point.series.name === 'Hashrate') goodVal = point.y;
                             if (point.series.name === 'Dead on arrival') doaVal = point.y;
                             if (point.series.name === 'Luck Trend') {
+                                var dy = point.y;
+                                var realLuck = dy <= 100 ? dy : 100 + 100 * (Math.pow(10, (dy - 100) / 100) - 1);
+                                var luckLabel = realLuck > 1000 ? (realLuck / 1000).toFixed(1) + 'k%' : d3.format('.0f')(realLuck) + '%';
                                 s += '<br/><span style="color:' + point.color + '">●</span> ' + 
-                                     point.series.name + ': <b>' + d3.format('.0f')(point.y) + '%</b>';
+                                     point.series.name + ': <b>' + luckLabel + '</b>';
                             } else if (point.series.name === 'Workers' || point.series.name === 'Miners' || point.series.name === 'Connected') {
                                 s += '<br/><span style="color:' + point.color + '">●</span> ' + 
                                      point.series.name + ': <b>' + Math.round(point.y) + '</b>';
@@ -5680,7 +5807,7 @@
                     }),
                     color: '#10b981',
                     visible: seriesVisibility.blocks,
-                    yAxis: 0,
+                    yAxis: 3,
                     tooltip: {
                         pointFormatter: function() {
                             var b = this.block;
@@ -5699,13 +5826,13 @@
                                 s += 'Expected: <b>' + format_dt(b.expected_time) + '</b><br/>';
                             }
                             if (b.network_difficulty) {
-                                var netHashrate = Math.floor(b.network_difficulty * Math.pow(2, 32) / 150);
+                                var netHashrate = Math.floor(b.network_difficulty * Math.pow(2, 32) / (parentBlockPeriodMs/1000));
                                 var netPdiff = b.network_difficulty * 65536;
                                 s += 'Net Diff: <b style="color:#8888ff">' + format_hashrate(netHashrate) + '</b><br/>';
                                 s += '<span style="font-size:10px;color:#aaa">(bdiff: ' + d3.format(',.2f')(b.network_difficulty) + ', pdiff: ' + d3.format('.2e')(netPdiff) + ')</span><br/>';
                             }
                             if (b.actual_hash_difficulty) {
-                                var actualHashrate = Math.floor(b.actual_hash_difficulty * Math.pow(2, 32) / 150);
+                                var actualHashrate = Math.floor(b.actual_hash_difficulty * Math.pow(2, 32) / (parentBlockPeriodMs/1000));
                                 var actualPdiff = b.actual_hash_difficulty * 65536;
                                 s += 'Hash Diff: <b style="color:#00d4ff">' + format_hashrate(actualHashrate) + '</b><br/>';
                                 s += '<span style="font-size:10px;color:#aaa">(bdiff: ' + d3.format(',.2f')(b.actual_hash_difficulty) + ', pdiff: ' + d3.format('.2e')(actualPdiff) + ')</span><br/>';
@@ -5776,6 +5903,22 @@
                         symbol: 'circle'
                     },
                     visible: seriesVisibility.netdiff,
+                    yAxis: 0
+                }, {
+                    type: 'area',
+                    name: 'Local',
+                    data: localHashrate,
+                    color: '#4caf50',
+                    lineColor: '#4caf50',
+                    fillColor: {
+                        linearGradient: { x1: 0, y1: 0, x2: 0, y2: 1 },
+                        stops: [
+                            [0, 'rgba(76, 175, 80, 0.55)'],
+                            [1, 'rgba(76, 175, 80, 0.08)']
+                        ]
+                    },
+                    lineWidth: 2,
+                    visible: seriesVisibility.local,
                     yAxis: 0
                 }]
             });

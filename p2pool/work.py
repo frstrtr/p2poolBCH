@@ -42,16 +42,27 @@ class WorkerBridge(worker_interface.WorkerBridge):
         self.worker_connected = variable.Event()    # args: (username, address, peer_ip)
         self.worker_disconnected = variable.Event() # args: (username, address, peer_ip)
         self.connected_workers = {}  # username -> {'address': addr, 'ip': ip, 'since': timestamp}
+        self.worker_shares = {}        # username -> {'accepted': n, 'rejected': n}
+        self.total_shares = {'accepted': 0, 'rejected': 0}
 
         @self.worker_connected.watch
         def _(username, address, peer_ip):
             self.connected_workers[username] = {'address': address, 'ip': peer_ip, 'since': time.time()}
+            if username not in self.worker_shares:
+                self.worker_shares[username] = {'accepted': 0, 'rejected': 0}
 
         @self.worker_disconnected.watch
         def _(username, address, peer_ip):
             self.connected_workers.pop(username, None)
         self.share_found = variable.Event()         # args: (username, address, share_hash_hex, dead)
         self.block_found = variable.Event()         # args: (username, address, block_hash_hex)
+        self.address_best_diff = {}       # address → best pow difficulty (session)
+        self.address_round_best_diff = {} # address → best pow difficulty since last block found
+
+        @self.block_found.watch
+        def _(*args):
+            self.address_round_best_diff = {}
+
         self.local_rate_monitor = math.RateMonitor(10*60)
         self.local_addr_rate_monitor = math.RateMonitor(10*60)
         
@@ -399,11 +410,13 @@ class WorkerBridge(worker_interface.WorkerBridge):
             else:
                 # If we don't yet have an estimated node hashrate, then we still need to not undershoot the difficulty.
                 # Otherwise, we might get 1 PH/s of hashrate on difficulty settings appropriate for 1 GH/s.
-                # 1/3000th the difficulty of a full share should be a reasonable upper bound. That way, if
-                # one node has the whole p2pool hashrate, it will still only need to process one pseudoshare
-                # every ~0.01 seconds.
+                # 1/3000000th the difficulty of a full share (1000x lower than the original 1/3000th) to ensure
+                # small nodes (GH/s-class miners) get frequent pseudoshares for hash rate estimation.
+                # The stratum adaptive difficulty adjusts per-miner after the first pseudoshare.
+                # With BCH network diff ~8e11, this gives initial pseudoshare diff ~265 per miner,
+                # appropriate for Bitaxe-class miners at 400-650 GH/s with share_rate=3.0 sec/share.
                 block_subsidy = self.node.bitcoind_work.value['subsidy']
-                target = min(target, 3000 * bitcoin_data.average_attempts_to_target((bitcoin_data.target_to_average_attempts(
+                target = min(target, 3000000 * bitcoin_data.average_attempts_to_target((bitcoin_data.target_to_average_attempts(
                     self.node.bitcoind_work.value['bits'].target)*self.node.net.SPREAD)*self.node.net.PARENT.DUST_THRESHOLD/block_subsidy))
         else:
             target = desired_pseudoshare_target
@@ -572,17 +585,32 @@ class WorkerBridge(worker_interface.WorkerBridge):
                 print 'Worker %s submitted share with hash > target:' % (username,)
                 print '    Hash:   %064x' % (pow_hash,)
                 print '    Target: %064x' % (pseudoshare_target,)
+                if username not in self.worker_shares:
+                    self.worker_shares[username] = {'accepted': 0, 'rejected': 0}
+                self.worker_shares[username]['rejected'] += 1
+                self.total_shares['rejected'] += 1
             elif header_hash in received_header_hashes:
                 print >>sys.stderr, 'Worker %s submitted share more than once!' % (username,)
             else:
                 received_header_hashes.add(header_hash)
-                
+                if username not in self.worker_shares:
+                    self.worker_shares[username] = {'accepted': 0, 'rejected': 0}
+                self.worker_shares[username]['accepted'] += 1
+                self.total_shares['accepted'] += 1
                 self.pseudoshare_received.happened(bitcoin_data.target_to_average_attempts(pseudoshare_target), not on_time, username)
                 self.recent_shares_ts_work.append((time.time(), bitcoin_data.target_to_average_attempts(pseudoshare_target)))
                 while len(self.recent_shares_ts_work) > 50:
                     self.recent_shares_ts_work.pop(0)
                 self.local_rate_monitor.add_datum(dict(work=bitcoin_data.target_to_average_attempts(pseudoshare_target), dead=not on_time, user=username, share_target=share_info['bits'].target))
                 self.local_addr_rate_monitor.add_datum(dict(work=bitcoin_data.target_to_average_attempts(pseudoshare_target), address=address))
+                if username in self.connected_workers:
+                    self.connected_workers[username]['last_diff'] = bitcoin_data.target_to_difficulty(pseudoshare_target)
+                # Track best pow difficulty per address
+                pow_diff = bitcoin_data.target_to_difficulty(pow_hash)
+                if pow_diff > self.address_best_diff.get(address, 0):
+                    self.address_best_diff[address] = pow_diff
+                if pow_diff > self.address_round_best_diff.get(address, 0):
+                    self.address_round_best_diff[address] = pow_diff
             t1 = time.time()
             if p2pool.BENCH and (t1-t0) > .01: print "%8.3f ms for work.py:got_response(%s)" % ((t1-t0)*1000., username)
 

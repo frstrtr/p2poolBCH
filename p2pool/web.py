@@ -319,18 +319,20 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
             # Include workers with live connections even if no shares submitted yet
             for worker_name, info in wb.connected_workers.iteritems():
                 if worker_name not in miner_hash_rates:
+                    last_diff = info.get('last_diff', 0)
+                    ws = wb.worker_shares.get(worker_name, {})
                     formatted_workers[worker_name] = {
                         'hash_rate': 0,
                         'dead_hash_rate': 0,
-                        'shares': 0,
-                        'accepted': 0,
-                        'rejected': 0,
+                        'accepted': ws.get('accepted', 0),
+                        'rejected': ws.get('rejected', 0),
+                        'shares': ws.get('accepted', 0) + ws.get('rejected', 0),
                         'last_seen': info['since'],
                         'first_seen': info['since'],
                         'connections': 1,
                         'active_connections': 1,
                         'backup_connections': 0,
-                        'connection_difficulties': [],
+                        'connection_difficulties': [last_diff] if last_diff else [],
                         'merged_addresses': {},
                         'merged_auto_converted': False,
                         'merged_redistributed': False,
@@ -338,27 +340,66 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                     }
             for worker_name, hr in miner_hash_rates.iteritems():
                 doa = miner_dead_hash_rates.get(worker_name, 0)
+                last_diff = wb.connected_workers.get(worker_name, {}).get('last_diff', 0)
+                first_seen = wb.connected_workers.get(worker_name, {}).get('since', start_time)
+                ws = wb.worker_shares.get(worker_name, {})
                 formatted_workers[worker_name] = {
                     'hash_rate': hr,
                     'dead_hash_rate': doa,
-                    'shares': 0,
-                    'accepted': 0,
-                    'rejected': 0,
+                    'accepted': ws.get('accepted', 0),
+                    'rejected': ws.get('rejected', 0),
+                    'shares': ws.get('accepted', 0) + ws.get('rejected', 0),
                     'last_seen': time.time(),
-                    'first_seen': start_time,
+                    'first_seen': first_seen,
                     'connections': 1,
                     'active_connections': 1,
                     'backup_connections': 0,
-                    'connection_difficulties': [],
+                    'connection_difficulties': [last_diff] if last_diff else [],
                     'merged_addresses': {},
                     'merged_auto_converted': False,
                     'merged_redistributed': False,
                     'merged_reverse_converted': False,
                 }
+
+            # Build IP stats from connected_workers
+            ip_connections = {}
+            ip_workers_map = {}
+            for wname, info in wb.connected_workers.iteritems():
+                ip = info.get('ip', 'unknown')
+                ip_connections[ip] = ip_connections.get(ip, 0) + 1
+                if ip not in ip_workers_map:
+                    ip_workers_map[ip] = set()
+                ip_workers_map[ip].add(wname)
+            ip_workers = {ip: len(workers) for ip, workers in ip_workers_map.iteritems()}
+
+            # Submission rate: shares per second over last ~50 pseudoshares
+            now = time.time()
+            shares_ts = [t for t, w in wb.recent_shares_ts_work]
+            if len(shares_ts) >= 2:
+                elapsed = now - shares_ts[0]
+                submission_rate = len(shares_ts) / elapsed if elapsed > 0 else 0
+            else:
+                submission_rate = 0
+
+            total_accepted = wb.total_shares.get('accepted', 0)
+            total_rejected = wb.total_shares.get('rejected', 0)
+
             return {
                 'pool': {
+                    'connections': len(wb.connected_workers),
+                    'workers': len(formatted_workers),
                     'total_workers': len(formatted_workers),
                     'total_hash_rate': sum(miner_hash_rates.itervalues()),
+                    'total_accepted': total_accepted,
+                    'total_rejected': total_rejected,
+                    'submission_rate': submission_rate,
+                    'uptime': time.time() - start_time,
+                    'ip_connections': ip_connections,
+                    'ip_workers': ip_workers,
+                    'threat_thresholds': {
+                        'connection_worker_elevated': 4.0,
+                        'connection_worker_warning': 6.0,
+                    },
                 },
                 'workers': formatted_workers,
             }
@@ -367,11 +408,46 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
     web_root.putChild('stratum_stats', WebInterface(get_stratum_stats))
 
     def get_stratum_security():
-        return {'bans': [], 'ddos_detected': False}
+        now = time.time()
+        shares_ts = [t for t, w in wb.recent_shares_ts_work]
+        rate_10s = sum(1 for t in shares_ts if now - t <= 10) / 10.0
+        rate_60s = sum(1 for t in shares_ts if now - t <= 60) / 60.0
+        burst_ratio = (rate_10s / rate_60s) if rate_60s > 0 else 1.0
+
+        suspicious = []
+        for wname, ws in wb.worker_shares.iteritems():
+            total = ws.get('accepted', 0) + ws.get('rejected', 0)
+            if total > 10 and total > 0 and ws.get('rejected', 0) / float(total) > 0.5:
+                suspicious.append({'name': wname, 'rate': rate_10s})
+
+        return {
+            'rate_10s': rate_10s,
+            'rate_60s': rate_60s,
+            'burst_ratio': burst_ratio,
+            'banned_ips_count': 0,
+            'banned_workers_count': 0,
+            'threat_level': 0,
+            'threat_reasons': [],
+            'suspicious_workers': suspicious,
+            'limits': {
+                'max_submissions_per_sec': 1000,
+                'max_connections_per_ip': 50,
+            },
+            'ddos_detected': False,
+            'bans': [],
+        }
     web_root.putChild('stratum_security', WebInterface(get_stratum_security))
 
     def get_ban_stats():
-        return {'bans': [], 'total_banned': 0}
+        return {
+            'banned_ips_count': 0,
+            'banned_workers_count': 0,
+            'banned_ips': [],
+            'banned_workers': [],
+            'ip_violations': [],
+            'total_banned': 0,
+            'bans': [],
+        }
     web_root.putChild('ban_stats', WebInterface(get_ban_stats))
 
     def get_connected_miners():
@@ -393,7 +469,133 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
             return []
     web_root.putChild('connected_miners', WebInterface(get_connected_miners))
 
-    # ==== Best Share ====
+    # ==== Per-miner stats (miner.html) ====
+    def get_miner_stats(address):
+        try:
+            miner_hash_rates, miner_dead_hash_rates = wb.get_local_rates()
+            current_payouts = node.get_current_txouts()
+            share_diff = bitcoin_data.target_to_difficulty(node.tracker.items[node.best_share_var.value].max_target) if node.best_share_var.value else 0
+
+            # Collect per-address hashrate from all workers matching this address
+            total_hr = 0
+            total_doa = 0
+            for wname, hr in miner_hash_rates.iteritems():
+                base = wname.split(',')[0].split('+')[0].split('/')[0].split('.')[0].split('_')[0]
+                if base == address:
+                    total_hr += hr
+                    total_doa += miner_dead_hash_rates.get(wname, 0)
+
+            # Check if miner is currently connected
+            is_connected = any(
+                wname.split(',')[0].split('+')[0].split('/')[0].split('.')[0].split('_')[0] == address
+                for wname in wb.connected_workers
+            )
+            active = is_connected or total_hr > 0
+
+            # Current payout from share chain (current_txouts keys are address strings)
+            payout_sat = 0
+            for addr_key, val in current_payouts.iteritems():
+                # Normalize: handle both 'bitcoincash:qp...' and 'qp...' formats
+                body = addr_key[len('bitcoincash:'):] if isinstance(addr_key, str) and addr_key.startswith('bitcoincash:') else addr_key
+                if addr_key == address or body == address or 'bitcoincash:' + addr_key == address:
+                    payout_sat += val
+                    break
+
+            doa_rate = (total_doa / total_hr) if total_hr > 0 else 0
+
+            best_diff_all = wb.address_best_diff.get(address, 0)
+            best_diff_round = wb.address_round_best_diff.get(address, 0)
+            try:
+                network_diff = bitcoin_data.target_to_difficulty(node.bitcoind_work.value['bits'].target) if node.bitcoind_work.value else 0
+            except Exception:
+                network_diff = 0
+            chance = (best_diff_all / network_diff * 100) if (best_diff_all > 0 and network_diff > 0) else 0
+
+            return dict(
+                address=address,
+                active=active,
+                hashrate=total_hr,
+                dead_hashrate=total_doa,
+                estimated_hashrate=False,
+                doa_rate=doa_rate,
+                share_difficulty=share_diff,
+                current_payout=payout_sat / 1e8,
+                total_shares=0,
+                dead_shares=0,
+                best_difficulty_all_time=best_diff_all,
+                best_difficulty_session=best_diff_all,
+                best_difficulty_round=best_diff_round,
+                chance_to_find_block=chance,
+                hashrate_periods={
+                    '1m': {'hashrate': total_hr},
+                    '10m': {'hashrate': total_hr},
+                    '1h': {'hashrate': total_hr},
+                },
+                merged_payouts=[],
+            )
+        except Exception as e:
+            return dict(address=address, active=False, error=str(e))
+    web_root.putChild('miner_stats', WebInterface(get_miner_stats))
+
+    def get_miner_payouts(address):
+        try:
+            # Collect found blocks from share chain that had a reward for this address
+            chain_height = node.tracker.get_height(node.best_share_var.value) if node.best_share_var.value else 0
+            blocks = [
+                s for s in node.tracker.get_chain(node.best_share_var.value, min(chain_height, node.net.CHAIN_LENGTH))
+                if s.pow_hash <= s.header['bits'].target
+            ] if node.best_share_var.value else []
+
+            explorer_prefix = ''
+            try:
+                from bitcoin.networks import bitcoincash as bchn
+                explorer_prefix = getattr(bchn, 'BLOCK_EXPLORER_URL_PREFIX', '')
+            except Exception:
+                pass
+
+            blocks_out = []
+            for s in blocks:
+                # Estimate this miner's share in the block
+                share = 0
+                try:
+                    txouts = s.share_info.get('new_transaction_hashes', {})
+                    # Use global current payouts as approximation
+                    current_payouts = node.get_current_txouts()
+                    # current_payouts keys are already address strings (not script bytes)
+                    for addr_key, val in current_payouts.iteritems():
+                        body = addr_key[len('bitcoincash:'):] if isinstance(addr_key, str) and addr_key.startswith('bitcoincash:') else addr_key
+                        if addr_key == address or body == address or 'bitcoincash:' + addr_key == address:
+                            share = val / 1e8
+                            break
+                except Exception:
+                    pass
+
+                block_hash = '%064x' % s.header_hash
+                blocks_out.append(dict(
+                    timestamp=s.timestamp,
+                    block_height=None,
+                    block_hash=block_hash,
+                    block_reward=s.share_data['subsidy'] / 1e8,
+                    estimated_payout=share,
+                    confirmations=0,
+                    status='confirmed',
+                    explorer_url=explorer_prefix + block_hash if explorer_prefix else '#',
+                ))
+
+            return dict(
+                blocks_found=len(blocks_out),
+                total_estimated_rewards=sum(b['estimated_payout'] for b in blocks_out),
+                confirmed_rewards=sum(b['estimated_payout'] for b in blocks_out),
+                maturing_rewards=0,
+                blocks=blocks_out,
+            )
+        except Exception as e:
+            return dict(error=str(e), blocks=[])
+    web_root.putChild('miner_payouts', WebInterface(get_miner_payouts))
+
+    web_root.putChild('merged_miner_payouts', WebInterface(lambda address: dict(
+        address=address, payouts=[], merged=[]
+    )))
     def get_best_share():
         if node.best_share_var.value is None:
             return None
@@ -481,40 +683,40 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
     def get_luck_stats():
         if node.best_share_var.value is None or node.bitcoind_work.value is None:
             return dict(luck_available=False, current_luck_trend=None, blocks=[])
-        attempts_per_block = bitcoin_data.target_to_average_attempts(node.bitcoind_work.value['bits'].target)
-        attempts_per_share = bitcoin_data.target_to_average_attempts(node.tracker.items[node.best_share_var.value].max_target)
-        # Collect found blocks from share chain
-        chain_height = node.tracker.get_height(node.best_share_var.value)
-        raw_blocks = [
-            dict(ts=s.timestamp, hash='%064x' % s.header_hash, share_hash=s.hash,
-                 share_target=s.target)
-            for s in node.tracker.get_chain(node.best_share_var.value, min(chain_height, node.net.CHAIN_LENGTH))
-            if s.pow_hash <= s.header['bits'].target
-        ]
-        # Compute current round luck: shares since last block vs expected shares
-        current_luck_trend = None
-        if attempts_per_share > 0:
-            shares_since_last_block = chain_height
-            if raw_blocks:
-                last_block_height = node.tracker.get_height(raw_blocks[0]['share_hash'])
-                shares_since_last_block = chain_height - last_block_height
-            expected_shares = float(attempts_per_block) / attempts_per_share
-            if shares_since_last_block > 0 and expected_shares > 0:
-                current_luck_trend = 100.0 * expected_shares / shares_since_last_block
-        blocks_out = []
-        for b in raw_blocks:
-            luck = None
-            if attempts_per_share > 0:
-                expected = float(attempts_per_block) / attempts_per_share
-                actual_diff = bitcoin_data.target_to_difficulty(b['share_target'])
-                if actual_diff > 0:
-                    luck = 100.0 * expected / max(1, actual_diff)
-            blocks_out.append(dict(ts=b['ts'], hash=b['hash'], luck=luck))
-        return dict(
-            luck_available=True,
-            current_luck_trend=current_luck_trend,
-            blocks=blocks_out,
-        )
+        try:
+            attempts_per_block = bitcoin_data.target_to_average_attempts(node.bitcoind_work.value['bits'].target)
+            attempts_per_share = bitcoin_data.target_to_average_attempts(node.tracker.items[node.best_share_var.value].max_target)
+            chain_height = node.tracker.get_height(node.best_share_var.value)
+            block_shares = [
+                s for s in node.tracker.get_chain(node.best_share_var.value, min(chain_height, node.net.CHAIN_LENGTH))
+                if s.pow_hash <= s.header['bits'].target
+            ]
+            block_heights = {s.hash: node.tracker.get_height(s.hash) for s in block_shares}
+            block_shares.sort(key=lambda s: -block_heights[s.hash])  # newest first
+
+            expected_shares = float(attempts_per_block) / attempts_per_share if attempts_per_share > 0 else 0.0
+
+            # Current round luck: shares elapsed since last block vs expected
+            current_luck_trend = None
+            if expected_shares > 0:
+                tip_height = chain_height
+                last_block_h = block_heights[block_shares[0].hash] if block_shares else 0
+                shares_since = tip_height - last_block_h
+                if shares_since > 0:
+                    current_luck_trend = 100.0 * expected_shares / shares_since
+
+            blocks_out = []
+            for i, s in enumerate(block_shares):
+                if i + 1 < len(block_shares):
+                    actual_shares = block_heights[s.hash] - block_heights[block_shares[i + 1].hash]
+                    luck = (100.0 * expected_shares / actual_shares) if actual_shares > 0 and expected_shares > 0 else None
+                else:
+                    luck = None
+                blocks_out.append(dict(ts=s.timestamp, hash='%064x' % s.header_hash, luck=luck))
+
+            return dict(luck_available=True, current_luck_trend=current_luck_trend, blocks=blocks_out)
+        except Exception:
+            return dict(luck_available=False, current_luck_trend=None, blocks=[])
     web_root.putChild('luck_stats', WebInterface(get_luck_stats))
     web_root.putChild('broadcaster_status', WebInterface(bitcoin_helper.get_broadcaster_status))
     web_root.putChild('merged_broadcaster_status', WebInterface(lambda: None))
@@ -541,18 +743,93 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
     web_root.putChild('payout_addr', WebInterface(lambda: wb.address))
     web_root.putChild('payout_addrs', WebInterface(
         lambda: list(add['address'] for add in wb.pubkeys.keys)))
-    web_root.putChild('recent_blocks', WebInterface(lambda: [dict(
-        ts=s.timestamp,
-        hash='%064x' % s.header_hash,
-        number=p2pool_data.parse_bip0034(s.share_data['coinbase'])[0],
-        share='%064x' % s.hash,
-        share_difficulty=bitcoin_data.target_to_difficulty(s.target),
-        network_difficulty=bitcoin_data.target_to_difficulty(s.header['bits'].target),
-        miner=(lambda addr: addr)(bitcoin_data.script2_to_address(s.new_script, node.net.PARENT.ADDRESS_VERSION, -1, node.net.PARENT) or
-               bitcoin_data.script2_to_address(s.new_script, node.net.PARENT.ADDRESS_P2SH_VERSION, -1, node.net.PARENT) or ''),
-        verified=s.hash in node.tracker.verified.items,
-        status='confirmed' if s.hash in node.tracker.verified.items else 'pending',
-    ) for s in node.tracker.get_chain(node.best_share_var.value, min(node.tracker.get_height(node.best_share_var.value), node.net.CHAIN_LENGTH)) if s.pow_hash <= s.header['bits'].target]))
+    def get_recent_blocks():
+        try:
+            if node.best_share_var.value is None or node.bitcoind_work.value is None:
+                return []
+            chain_height = node.tracker.get_height(node.best_share_var.value)
+            block_shares = [
+                s for s in node.tracker.get_chain(
+                    node.best_share_var.value,
+                    min(chain_height, node.net.CHAIN_LENGTH))
+                if s.pow_hash <= s.header['bits'].target
+            ]
+            if not block_shares:
+                return []
+
+            # Heights for luck calculation
+            block_heights = {s.hash: node.tracker.get_height(s.hash) for s in block_shares}
+            block_shares.sort(key=lambda s: -block_heights[s.hash])  # newest first
+
+            # Expected shares per block (using current network/share difficulty for luck comparison)
+            expected_shares = 0.0
+            try:
+                attempts_per_share = bitcoin_data.target_to_average_attempts(
+                    node.tracker.items[node.best_share_var.value].max_target)
+                attempts_per_block = bitcoin_data.target_to_average_attempts(
+                    node.bitcoind_work.value['bits'].target)
+                if attempts_per_share > 0:
+                    expected_shares = float(attempts_per_block) / attempts_per_share
+            except Exception:
+                pass
+
+            result = []
+            for i, s in enumerate(block_shares):
+                h = block_heights[s.hash]
+                if i + 1 < len(block_shares):
+                    prev_h = block_heights[block_shares[i + 1].hash]
+                    actual_shares = h - prev_h
+                    time_to_find = float(s.timestamp - block_shares[i + 1].timestamp)
+                    luck = (100.0 * expected_shares / actual_shares) if actual_shares > 0 and expected_shares > 0 else None
+                    luck_method = 'shares'
+                else:
+                    time_to_find = None
+                    luck = None
+                    luck_method = 'first_block'
+
+                # Compute expected_time using actual pool hashrate at this block's position.
+                # This matches the "Miners Block Value" card formula: attempts_to_block / pool_hash_rate.
+                # The old formula (expected_shares * SHARE_PERIOD) assumed only 1 share per SHARE_PERIOD
+                # (single worker) and was wrong by a factor of ~num_workers.
+                expected_time = None
+                try:
+                    lookbehind_at_block = min(h, max(2, 3600 // node.net.SHARE_PERIOD))
+                    if lookbehind_at_block >= 2:
+                        pool_rate_at_block = p2pool_data.get_pool_attempts_per_second(
+                            node.tracker, s.hash, lookbehind_at_block)
+                        if pool_rate_at_block > 0:
+                            attempts_per_block_at_time = bitcoin_data.target_to_average_attempts(
+                                s.header['bits'].target)
+                            expected_time = float(attempts_per_block_at_time) / pool_rate_at_block
+                except Exception:
+                    pass
+
+                try:
+                    actual_hash_diff = bitcoin_data.target_to_difficulty(s.pow_hash) if s.pow_hash > 0 else None
+                except Exception:
+                    actual_hash_diff = None
+
+                result.append(dict(
+                    ts=s.timestamp,
+                    hash='%064x' % s.header_hash,
+                    number=p2pool_data.parse_bip0034(s.share_data['coinbase'])[0],
+                    share='%064x' % s.hash,
+                    share_difficulty=bitcoin_data.target_to_difficulty(s.target),
+                    network_difficulty=bitcoin_data.target_to_difficulty(s.header['bits'].target),
+                    actual_hash_difficulty=actual_hash_diff,
+                    miner=(bitcoin_data.script2_to_address(s.new_script, node.net.PARENT.ADDRESS_VERSION, -1, node.net.PARENT) or
+                           bitcoin_data.script2_to_address(s.new_script, node.net.PARENT.ADDRESS_P2SH_VERSION, -1, node.net.PARENT) or ''),
+                    verified=s.hash in node.tracker.verified.items,
+                    status='confirmed' if s.hash in node.tracker.verified.items else 'pending',
+                    luck=luck,
+                    luck_method=luck_method,
+                    time_to_find=time_to_find,
+                    expected_time=expected_time,
+                ))
+            return result
+        except Exception:
+            return []
+    web_root.putChild('recent_blocks', WebInterface(get_recent_blocks))
     web_root.putChild('uptime', WebInterface(lambda: time.time() - start_time))
     web_root.putChild('stale_rates', WebInterface(lambda: p2pool_data.get_stale_counts(node.tracker, node.best_share_var.value, decent_height(), rates=True)))
     
@@ -691,6 +968,7 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
         block_explorer_url_prefix=node.net.PARENT.BLOCK_EXPLORER_URL_PREFIX,
         address_explorer_url_prefix=node.net.PARENT.ADDRESS_EXPLORER_URL_PREFIX,
         tx_explorer_url_prefix=node.net.PARENT.TX_EXPLORER_URL_PREFIX,
+        block_period=node.net.PARENT.BLOCK_PERIOD,
     )))
     new_root.putChild('version', WebInterface(lambda: p2pool.__version__))
     
@@ -782,8 +1060,27 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                     add['address'], 0) * 1e-8
         hd.datastreams['current_payout'].add_datum(t, my_current_payouts)
         miner_hash_rates, miner_dead_hash_rates = wb.get_local_rates()
-        current_txouts_by_address = current_txouts
-        hd.datastreams['current_payouts'].add_datum(t, dict((user, current_txouts_by_address[user]*1e-8) for user in miner_hash_rates if user in current_txouts_by_address))
+        # current_txouts keys are already address strings (from WeightsSkipList using share.address)
+        # Try normalized lookup: strip/add 'bitcoincash:' prefix to handle mixed formats
+        def lookup_payout(addr, txouts):
+            if addr in txouts:
+                return txouts[addr]
+            # Try without prefix
+            body = addr[len('bitcoincash:'):] if addr.startswith('bitcoincash:') else None
+            if body and body in txouts:
+                return txouts[body]
+            # Try with prefix
+            with_prefix = 'bitcoincash:' + addr
+            if with_prefix in txouts:
+                return txouts[with_prefix]
+            return 0
+        payout_by_addr = {}
+        for worker_name in miner_hash_rates:
+            base_addr = worker_name.split(',')[0].split('+')[0].split('/')[0].split('.')[0].split('_')[0]
+            val = lookup_payout(base_addr, current_txouts)
+            if val > 0:
+                payout_by_addr[base_addr] = val * 1e-8
+        hd.datastreams['current_payouts'].add_datum(t, payout_by_addr)
         
         hd.datastreams['peers'].add_datum(t, dict(
             incoming=sum(1 for peer in node.p2p_node.peers.itervalues() if peer.incoming),
@@ -805,7 +1102,7 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
             base = user.split(',')[0].split('+')[0].split('/')[0].split('.')[0].split('_')[0]
             unique_addrs.add(base)
         hd.datastreams['unique_miner_count'].add_datum(t, len(unique_addrs))
-        hd.datastreams['connected_miners'].add_datum(t, len(unique_addrs))
+        hd.datastreams['connected_miners'].add_datum(t, len(wb.connected_workers))
     x = deferral.RobustLoopingCall(add_point)
     x.start(5)
     stop_event.watch(x.stop)

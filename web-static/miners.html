@@ -524,7 +524,7 @@
         
         <!-- Workers List -->
         <div class="section-header">
-            <h2>Active Workers <span class="badge" id="miners_count">0</span></h2>
+            <h2>Active Miners <span class="badge" id="miners_count">0</span></h2>
         </div>
         
         <div id="miners_loading" class="loading">
@@ -818,6 +818,7 @@
                     d3.select('#total_miners').text(miners.length);
                     d3.select('#total_hashrate').text(total_hashrate > 0 ? '~' + format_hashrate(total_hashrate) : '0 H/s');
                     d3.select('#total_doa').text(d3.format('.2%')(total_doa_percent));
+                    var total_workers = d3.sum(miners, function(m) { return m.workers.length; });
                     d3.select('#miners_count').text(miners.length);
                     
                     // Calculate average time to share
@@ -1130,7 +1131,7 @@
                     hashLink.className = 'hash-link';
                     hashLink.href = (currency_info.block_explorer_url_prefix || '#') + block.hash;
                     hashLink.target = '_blank';
-                    hashLink.textContent = (block.pow_hash_hex || block.hash || '-').substring(0, 16) + '...';
+                    hashLink.textContent = '...' + (block.pow_hash_hex || block.hash || '-').slice(-12);
                     if (block.pow_hash_hex) hashLink.title = 'SHA256d: ' + block.hash + '\nPoW: ' + block.pow_hash_hex;
                     tdHash.appendChild(hashLink);
                     tr.appendChild(tdHash);
@@ -1249,7 +1250,7 @@
                     hashLink.target = '_blank';
                     hashLink.title = 'Block Hash: ' + (block.hash || 'N/A') + '\nPoW Hash: ' + (block.pow_hash || 'N/A');
                     var hash = block.hash || block.pow_hash || '-';
-                    hashLink.textContent = hash.substring(0, 16) + '...';
+                    hashLink.textContent = '...' + hash.slice(-12);
                     tdHash.appendChild(hashLink);
                     tr.appendChild(tdHash);
                     
