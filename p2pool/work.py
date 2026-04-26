@@ -41,6 +41,15 @@ class WorkerBridge(worker_interface.WorkerBridge):
         self.share_received = variable.Event()
         self.worker_connected = variable.Event()    # args: (username, address, peer_ip)
         self.worker_disconnected = variable.Event() # args: (username, address, peer_ip)
+        self.connected_workers = {}  # username -> {'address': addr, 'ip': ip, 'since': timestamp}
+
+        @self.worker_connected.watch
+        def _(username, address, peer_ip):
+            self.connected_workers[username] = {'address': address, 'ip': peer_ip, 'since': time.time()}
+
+        @self.worker_disconnected.watch
+        def _(username, address, peer_ip):
+            self.connected_workers.pop(username, None)
         self.share_found = variable.Event()         # args: (username, address, share_hash_hex, dead)
         self.block_found = variable.Event()         # args: (username, address, block_hash_hex)
         self.local_rate_monitor = math.RateMonitor(10*60)

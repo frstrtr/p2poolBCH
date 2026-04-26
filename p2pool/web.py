@@ -316,6 +316,26 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
         try:
             miner_hash_rates, miner_dead_hash_rates = wb.get_local_rates()
             formatted_workers = {}
+            # Include workers with live connections even if no shares submitted yet
+            for worker_name, info in wb.connected_workers.iteritems():
+                if worker_name not in miner_hash_rates:
+                    formatted_workers[worker_name] = {
+                        'hash_rate': 0,
+                        'dead_hash_rate': 0,
+                        'shares': 0,
+                        'accepted': 0,
+                        'rejected': 0,
+                        'last_seen': info['since'],
+                        'first_seen': info['since'],
+                        'connections': 1,
+                        'active_connections': 1,
+                        'backup_connections': 0,
+                        'connection_difficulties': [],
+                        'merged_addresses': {},
+                        'merged_auto_converted': False,
+                        'merged_redistributed': False,
+                        'merged_reverse_converted': False,
+                    }
             for worker_name, hr in miner_hash_rates.iteritems():
                 doa = miner_dead_hash_rates.get(worker_name, 0)
                 formatted_workers[worker_name] = {
@@ -356,12 +376,18 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
 
     def get_connected_miners():
         try:
-            miner_hash_rates, _ = wb.get_local_rates()
             addresses = set()
-            for user in miner_hash_rates:
+            for user in wb.connected_workers:
                 base = user.split('+')[0].split('/')[0].split('.')[0].split('_')[0]
                 if base:
                     addresses.add(base)
+            # Fall back to hash-rate-based detection if no live tracking data
+            if not addresses:
+                miner_hash_rates, _ = wb.get_local_rates()
+                for user in miner_hash_rates:
+                    base = user.split('+')[0].split('/')[0].split('.')[0].split('_')[0]
+                    if base:
+                        addresses.add(base)
             return list(addresses)
         except:
             return []
