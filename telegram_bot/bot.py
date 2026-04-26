@@ -10,7 +10,7 @@ Or run directly:
 
 Required environment variables (see config.py):
     BOT_TOKEN              Telegram bot token from @BotFather
-    LOCAL_EVENT_PORT       Port the p2pool notifier POSTs to (default 9349)
+    LOCAL_EVENT_PORT       Port the p2pool notifier POSTs to (default 19349)
     P2POOL_API_URL         Base URL of p2pool web API (default http://127.0.0.1:9348)
     SUBSCRIPTIONS_FILE     Path to JSON subscription store (optional)
     BROADCAST_CHANNEL_ID   Telegram channel ID for broadcast (optional)

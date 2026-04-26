@@ -1,0 +1,88 @@
+# docker-compose.yml — P2Pool BCH with bridged-LAN (macvlan) networking
+#
+# BRIDGED LAN SETUP (macvlan)
+# ─────────────────────────────────────────────────────────────────────────────
+# The p2pool container receives its own MAC address and LAN IP so miners and
+# peers reach it directly — no port-forwarding or NAT required.
+#
+# BEFORE STARTING:
+#   1. Find your host's LAN interface:    ip -br link
+#   2. Update 'parent' below to match    (e.g. eth0, enp3s0, ens18)
+#   3. Update subnet/gateway/ip_range    to match your LAN
+#   4. Set a static IPv4 for the container inside ip_range
+#   5. Create /etc/p2pool-bot.env        (see telegram_bot/.env.example)
+#      chmod 600 /etc/p2pool-bot.env
+#
+# NOTE: by default the Docker host CANNOT reach a macvlan container on the
+#       same physical interface. To talk to the container from the host,
+#       create a macvlan shim:
+#         ip link add macvlan-shim link eth0 type macvlan mode bridge
+#         ip addr add 192.168.86.241/32 dev macvlan-shim
+#         ip link set macvlan-shim up
+#         ip route add 192.168.86.240/32 dev macvlan-shim
+#
+# ALTERNATIVE — host networking (simpler, no isolation):
+#   Comment out the 'networks' section and 'networks:' key in p2pool service,
+#   then add:  network_mode: host
+
+version: "3.9"
+
+# ─── Macvlan bridged-LAN network ────────────────────────────────────────────
+networks:
+  bch-lan:
+    driver: macvlan
+    driver_opts:
+      parent: eth0            # ← change to your host LAN interface
+    ipam:
+      config:
+        - subnet: 192.168.86.0/24
+          gateway: 192.168.86.1
+          ip_range: 192.168.86.240/29   # containers may use .240–.246
+
+# ─── Volumes ────────────────────────────────────────────────────────────────
+volumes:
+  p2pool-data:
+
+# ─── Services ───────────────────────────────────────────────────────────────
+services:
+  p2pool:
+    image: ghcr.io/frstrtr/p2poolbch:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+
+    networks:
+      bch-lan:
+        ipv4_address: 192.168.86.240    # ← static LAN IP for this node
+
+    # Ports are accessible directly via macvlan IP — no mapping needed.
+    # Uncomment if using bridge/host networking instead of macvlan:
+    # ports:
+    #   - "9348:9348"   # Stratum + Web UI
+    #   - "9349:9349"   # p2pool P2P
+
+    # ── Required ────────────────────────────────────────────────────────────
+    environment:
+      RPC_HOST: "192.168.86.110"        # ← your BCHN node's IP
+      RPC_USER: "bitcoinrpc"
+      RPC_PASS: "changeme"              # ← use secrets in production
+
+    # ── Optional ────────────────────────────────────────────────────────────
+    #   NETWORK:            bitcoincash
+    #   PAYOUT_ADDRESS:     dynamic
+    #   NODE_NAME:          my-p2pool
+    #   P2POOL_EXTRA_ARGS:  --fee 1
+
+    # ── Telegram bot ────────────────────────────────────────────────────────
+    # Mount the env file; the entrypoint auto-detects it and starts the bot.
+    volumes:
+      - /etc/p2pool-bot.env:/etc/p2pool-bot.env:ro
+      - p2pool-data:/p2pool/data
+
+    # Resource limits (tune to your hardware)
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: "1g"

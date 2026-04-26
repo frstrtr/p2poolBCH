@@ -337,7 +337,7 @@ def main(args, net, datadir_path, merged_urls, worker_endpoint):
                                bitcoind, args.share_rate)
         
         if args.run_bot and not args.local_bot_url:
-            args.local_bot_url = 'http://127.0.0.1:9349'
+            args.local_bot_url = 'http://127.0.0.1:19349'
         
         if args.local_bot_url:
             import socket as _socket

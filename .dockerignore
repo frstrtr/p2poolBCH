@@ -1,0 +1,38 @@
+# Version control
+.git
+.gitignore
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+litecoin_scrypt/build/
+ltc_scrypt.so
+_trial_temp*/
+
+# Data / state
+data/
+*.log
+
+# Local dev / IDE
+.cache/
+.pyenv/
+.coverage
+Makefile.local
+.pkglist
+.venv/
+venv/
+
+# Docker override files (contain secrets / local paths)
+docker-compose.override.yml
+docker-compose.local.yml
+
+# CI / editor
+.github/
+dev/

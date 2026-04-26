@@ -7,7 +7,7 @@ import os
 BOT_TOKEN: str = os.environ["BOT_TOKEN"]
 
 # Port that aiohttp listens on for p2pool event POSTs
-LOCAL_EVENT_PORT: int = int(os.environ.get("LOCAL_EVENT_PORT", "9349"))
+LOCAL_EVENT_PORT: int = int(os.environ.get("LOCAL_EVENT_PORT", "19349"))
 
 # Base URL of the running p2pool node's JSON-RPC web interface (for /api/*)
 P2POOL_API_URL: str = os.environ.get("P2POOL_API_URL", "http://127.0.0.1:9348")
