@@ -79,4 +79,4 @@ if [ -n "${P2POOL_EXTRA_ARGS:-}" ]; then
 fi
 
 # shellcheck disable=SC2086
-exec pypy run_p2pool.py ${ARGS} "${RPC_HOST}" "${RPC_USER}" "${RPC_PASS}"
+exec pypy run_p2pool.py ${ARGS} --bitcoind-address "${RPC_HOST}" "${RPC_USER}" "${RPC_PASS}"
