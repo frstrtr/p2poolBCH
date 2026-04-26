@@ -8,7 +8,10 @@
 #
 # Optional environment variables:
 #   NETWORK              p2pool network name (default: bitcoincash)
-#   PAYOUT_ADDRESS       mining payout address; "dynamic" uses miner login (default: dynamic)
+#   PAYOUT_ADDRESS       mining payout address (BCH address, e.g. bitcoincash:qp... or legacy 1...).
+#                        Required when using BCHN — modern BCHN removed the legacy wallet RPC that
+#                        p2pool falls back to when no address is supplied.  Set to "dynamic" to let
+#                        each miner's login name be used as the payout address (default: dynamic).
 #   NODE_NAME            human-readable node label shown in shares (default: hostname)
 #   P2POOL_PORT          p2pool P2P listen port (default: network default 9349)
 #   WORKER_PORT          Stratum+web listen port (default: 9348)
