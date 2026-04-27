@@ -102,24 +102,26 @@ class StratumRPCMiningProvider(object):
 
         t0 = time.time()
         d = self.other.svc_client.rpc_get_version()
-        def on_response(result):
-            rtt = time.time() - t0
+        def _record_rtt(rtt):
             now_t = time.time()
             w_info = self.wb.connected_workers.get(self.username)
             if w_info is not None:
                 alpha = 0.2
                 prev = w_info.get('latency', rtt)
                 w_info['latency'] = alpha * rtt + (1.0 - alpha) * prev
-            # append to 24h history (persists across reconnects)
             hist = self.wb.worker_latency_history.setdefault(self.username, [])
             hist.append((now_t, rtt))
             cutoff = now_t - 86400
             while hist and hist[0][0] < cutoff:
                 hist.pop(0)
+        def on_response(result):
+            _record_rtt(time.time() - t0)
             if self._ping_active:
                 self._ping_call = reactor.callLater(300, self._ping_once)
         def on_error(err):
-            # miner does not support client.get_version — reschedule silently
+            # miner replied with an error (method unsupported) — still a
+            # valid round-trip, so record the RTT anyway
+            _record_rtt(time.time() - t0)
             if self._ping_active:
                 self._ping_call = reactor.callLater(300, self._ping_once)
         d.addCallbacks(on_response, on_error)
