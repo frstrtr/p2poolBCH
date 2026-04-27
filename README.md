@@ -47,7 +47,13 @@ using the pre-built GHCR image — no compilation required.
   rpcpassword=YOUR_RPC_PASS
   rpcallowip=0.0.0.0/0    # tighten to your Docker subnet in production
   ```
-- **Docker** installed on the host.
+- **Docker** installed on the host:
+  ```bash
+  sudo apt update && sudo apt install -y docker.io
+  sudo systemctl enable --now docker
+  sudo usermod -aG docker $USER
+  newgrp docker   # apply group without logging out; or log out and back in
+  ```
 - A **Telegram bot token** — message [@BotFather](https://t.me/BotFather), send `/newbot`,
   follow the prompts, and copy the token it gives you (`123456:ABC-DEF...`).
 
