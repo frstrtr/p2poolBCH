@@ -1,36 +1,5 @@
 # Installing p2pool on Ubuntu 24.04 (local-only, PyPy/Python2 support)
 
-This guide documents a tested, local-only path to run the p2pool codebase on Ubuntu 24.04. It focuses on the repository's README recommendation to use PyPy (PyPy2) and explains alternatives (compile Python 2.7, build older OpenSSL) when necessary.
-
-High level choices (recommended order):
-
-- Recommended (fastest, least invasive): Install a local PyPy2 binary in your home directory, bootstrap pip there, and install the p2pool Python requirements into that PyPy environment. This avoids system package conflicts and works well on modern Ubuntu releases.
-- Alternative (system-level, more invasive): Build and install Python 2.7 from source (into /usr/local) and install pip, then install requirements. This is more work and may require building an OpenSSL that matches the expected ABI for legacy pyOpenSSL packages.
-- Avoid Docker only if you explicitly disallow it (this guide respects local-only requirement).
-
-Prerequisites / assumptions
-
-- You have a regular user account with sudo available for installing build dependencies (the PyPy path described below itself does not require sudo).
-- You have at least ~200 MB free for PyPy + packages; building cryptography/pyOpenSSL from source may require more disk space temporarily.
-- This guide targets Ubuntu 24.04 ("noble"); adjust apt package names for other releases.
-
-Overview of tasks
-
-1. Install system build dependencies (only required for building native wheels).
-2. Download and extract PyPy2 binary into your home directory.
-3. Bootstrap pip for PyPy and install Python requirements for p2pool.
-4. Create or configure `~/.bitcoin/bitcoin.conf` (RPC credentials) or point p2pool to an external bitcoind RPC endpoint.
-5. Start p2pool with the extracted PyPy binary and verify it runs.
-
-Quick (recommended) commands
-
-Run these commands to get a working PyPy-based p2pool quickly. Read the detailed sections below if you want to understand alternatives or troubleshoot.
-
-```bash
-cd /usr/local/src
-wget https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tgz
-# Installing p2pool on Ubuntu 24.04 (local-only, PyPy/Python2 support)
-
 This guide documents a tested, local-only path to run the p2pool codebase on Ubuntu 24.04 using
 PyPy2. Modern Ubuntu packages and binary wheels can be incompatible with PyPy2 binary extensions,
 so this document shows how to build a local OpenSSL 1.1.1 and build `cryptography`/`pyOpenSSL`
@@ -38,11 +7,17 @@ against it. An automated helper is included at `contrib/install_ubuntu_24.04_py2
 
 High level options
 
-- Recommended: install a local PyPy2 binary in your home directory, bootstrap pip there, and
-  install the p2pool Python requirements into that PyPy environment. This avoids changing system
-  OpenSSL or system Python and is the least invasive option.
-- Alternative: build Python 2.7 from source and compile it against a private OpenSSL if you need
-  a system-level CPython 2.7. This is more work and more invasive.
+- **Docker (easiest):** pull `ghcr.io/frstrtr/p2poolbch:latest` and run with env vars — no
+  Python/OpenSSL setup needed. See `README.md` and `docker-compose.yml` for networking modes
+  (host, macvlan, bridge). Use this unless you need a bare-metal systemd service.
+- **Automated bare-metal installer (recommended for systemd):** run
+  `contrib/install_ubuntu_24.04_py2_pypy.sh` as root — downloads PyPy2, builds OpenSSL 1.1,
+  installs all deps, creates a ready-to-use systemd unit.
+- **Manual PyPy2 (this guide):** install a local PyPy2 binary in your home directory, build
+  OpenSSL 1.1 locally, bootstrap pip, and install requirements. Avoids changing system OpenSSL
+  or system Python.
+- **CPython 2.7 from source:** build Python 2.7 from source compiled against a private OpenSSL.
+  More invasive and rarely needed.
 
 Prerequisites / assumptions
 

@@ -144,6 +144,45 @@ Smoke test:
 docker run --rm p2pool-bch pypy run_p2pool.py --help
 ```
 
+**Container networking modes**
+
+Networking is not baked into the image — it is chosen at runtime.  Pick whichever mode fits your setup:
+
+| Mode | How | Best for |
+|------|-----|----------|
+| **host** | `--network host` | Dedicated VM or bare-metal host — simplest, no NAT, no port-forwarding needed |
+| **macvlan** (bridged LAN) | `docker-compose.yml` (included) | Container gets its own LAN IP and MAC; miners reach it directly |
+| **bridge + `-p`** | `-p 9348:9348 -p 9349:9349` | Shared host, multiple containers; requires router port-forward for P2P |
+
+*Host networking* (recommended for a dedicated VM):
+```bash
+docker run -d --restart unless-stopped \
+  --network host \
+  -e RPC_HOST=192.168.86.110 \
+  -e RPC_USER=bitcoinrpc \
+  -e RPC_PASS=YOURPASS \
+  -e PAYOUT_ADDRESS=YOUR_BCH_ADDRESS \
+  --name p2pool-bch \
+  p2pool-bch
+```
+
+*Macvlan (bridged LAN)* — container appears on LAN with its own IP, no port-mapping needed:
+```bash
+# Edit docker-compose.yml first:
+#   parent: eth0          → your host's LAN interface (ip -br link)
+#   ipv4_address          → a free static LAN IP
+#   RPC_HOST              → your BCHN node's IP
+docker compose up -d
+```
+> **macvlan host↔container caveat:** the Docker host itself cannot reach a macvlan container by default.
+> Create a shim to fix this:
+> ```bash
+> ip link add macvlan-shim link eth0 type macvlan mode bridge
+> ip addr add 192.168.86.241/32 dev macvlan-shim
+> ip link set macvlan-shim up
+> ip route add 192.168.86.240/32 dev macvlan-shim
+> ```
+
 **Pre-built image from GitHub Container Registry (ghcr.io)**
 
 Every push to `master` and every `v*` release tag is automatically built and pushed to GHCR by the included GitHub Actions workflow (`.github/workflows/docker.yml`).  No local build required — just pull and run:
