@@ -207,5 +207,6 @@ def build_conversation_handler() -> ConversationHandler:
         fallbacks=[CommandHandler("start", cmd_start)],
         allow_reentry=True,
         per_chat=True,
-        per_user=False,  # group-safe: one sub per chat, not per user
+        per_user=False,   # group-safe: one sub per chat, not per user
+        per_message=False,
     )
