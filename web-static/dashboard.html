@@ -2437,6 +2437,16 @@
                 // Node fee percentage
                 var nodeFee = local_stats.fee != null ? local_stats.fee : 0;
                 d3.select('#node_fee_percent').text(d3.format('.1f')(nodeFee));
+
+                // Node owner per-block income = what's left after miners' share
+                // block_value_payments = subsidy after dev donation
+                // block_value_miner    = block_value_payments * (1 - node_fee/100)
+                // node owner earns the difference
+                var bvPayments = local_stats.block_value_payments != null ? local_stats.block_value_payments : (local_stats.block_value || 0);
+                var bvMiner    = local_stats.block_value_miner    != null ? local_stats.block_value_miner    : bvPayments;
+                var nodeFeeAmount = Math.max(0, bvPayments - bvMiner);
+                d3.select('#payout_totamount').text(d3.format('.4f')(nodeFeeAmount));
+                d3.select('#node_payout_symbol').text(local_stats.coin_symbol || 'BCH');
                 
                 // Warnings
                 var warnings = d3.select('#warnings').selectAll('.warning-item')
@@ -3651,23 +3661,24 @@
                 }
                 
                 d3.json('../payout_addrs', function(addrs) {
-                    var totamount = 0;
+                    // payout_addrs was previously used to populate #payout_totamount
+                    // (node fee card), but that calculation was wrong — it showed the
+                    // node owner's accumulated queue credits instead of fee×block_value.
+                    // #payout_totamount is now set correctly from local_stats in
+                    // loadStats(). This block is kept only to drive the merged payout
+                    // sub-line on the node fee card.
                     var totMergedAmount = 0;
                     if (addrs) {
                         for (var i in addrs) {
                             var addr = addrs[i];
-                            if (addr in mergedPays) {
-                                totamount += mergedPays[addr].amount;
-                                // Sum merged payouts for node owner
-                                if (mergedPays[addr].merged) {
-                                    mergedPays[addr].merged.forEach(function(m) {
-                                        totMergedAmount += m.amount || 0;
-                                    });
-                                }
+                            if (addr in mergedPays && mergedPays[addr].merged) {
+                                mergedPays[addr].merged.forEach(function(m) {
+                                    totMergedAmount += m.amount || 0;
+                                });
                             }
                         }
                     }
-                    d3.select('#payout_totamount').text(d3.format('.4f')(totamount));
+                    // (payout_totamount intentionally not set here)
                     
                     // Show merged payout only when merged mining is active
                     if (window.payoutsMergedSymbol) {
