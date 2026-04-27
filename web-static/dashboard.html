@@ -4706,13 +4706,32 @@
                     // Start time: use earliest block in window (even luck=null), fallback to first luck point
                     var startTime = firstBlockInWindow ? firstBlockInWindow.ts * 1000 - 1 : luckTrendData[0][0] - 1;
                     
+                    // Luck follows a 1/elapsed-shares relationship (shares accumulate linearly):
+                    // luck(t) = blockLuck × (blockTime − roundStart) / (t − roundStart)
+                    // This correctly reflects that at the moment the block was found, luck = blockLuck,
+                    // and earlier in the round (fewer shares submitted) luck was higher.
+                    var blockLuckAtStart = (firstBlockInWindow && firstBlockInWindow.luck != null)
+                        ? firstBlockInWindow.luck : 100;
                     if (prevBlock) {
-                        // Decay from 100% at prevBlock's time to the round-start time
-                        var decayToMin = Math.exp(-(startTime - prevBlock.ts * 1000) / targetBlockTimeMs);
-                        luckTrendData.unshift([startTime, 100 * decayToMin]);
+                        var roundStart = prevBlock.ts * 1000;
+                        var blockTime = firstBlockInWindow.ts * 1000;
+                        var roundDuration = blockTime - roundStart;
+                        // Just before the block: luck ≈ block's own luck
+                        luckTrendData.unshift([startTime, blockLuckAtStart]);
+                        // Extend back to minTime using proportional formula
+                        if (minTime < startTime && roundDuration > 0) {
+                            var elapsedAtMin = minTime - roundStart;
+                            var luckAtMin = (elapsedAtMin > 0)
+                                ? blockLuckAtStart * roundDuration / elapsedAtMin
+                                : blockLuckAtStart;
+                            luckTrendData.unshift([minTime, luckAtMin]);
+                        }
                     } else {
-                        // No previous block known — insert 100% just before the earliest block in window
-                        luckTrendData.unshift([startTime, 100]);
+                        // No prior block known — flat line at block's luck back to window start
+                        luckTrendData.unshift([startTime, blockLuckAtStart]);
+                        if (minTime < startTime) {
+                            luckTrendData.unshift([minTime, blockLuckAtStart]);
+                        }
                     }
                 }
                 
@@ -5413,13 +5432,30 @@
                     // Start time: use earliest block in window (even luck=null), fallback to first luck point
                     var startTime = firstBlockInWindow ? firstBlockInWindow.ts * 1000 - 1 : luckTrendData[0][0] - 1;
                     
+                    // Luck follows a 1/elapsed-shares relationship (shares accumulate linearly):
+                    // luck(t) = blockLuck × (blockTime − roundStart) / (t − roundStart)
+                    var blockLuckAtStart = (firstBlockInWindow && firstBlockInWindow.luck != null)
+                        ? firstBlockInWindow.luck : 100;
                     if (prevBlock) {
-                        // Decay from 100% at prevBlock's time to the round-start time
-                        var decayToMin = Math.exp(-(startTime - prevBlock.ts * 1000) / targetBlockTimeMs);
-                        luckTrendData.unshift([startTime, 100 * decayToMin]);
+                        var roundStart = prevBlock.ts * 1000;
+                        var blockTime = firstBlockInWindow.ts * 1000;
+                        var roundDuration = blockTime - roundStart;
+                        // Just before the block: luck ≈ block's own luck
+                        luckTrendData.unshift([startTime, blockLuckAtStart]);
+                        // Extend back to minTime using proportional formula
+                        if (minTime < startTime && roundDuration > 0) {
+                            var elapsedAtMin = minTime - roundStart;
+                            var luckAtMin = (elapsedAtMin > 0)
+                                ? blockLuckAtStart * roundDuration / elapsedAtMin
+                                : blockLuckAtStart;
+                            luckTrendData.unshift([minTime, luckAtMin]);
+                        }
                     } else {
-                        // No previous block known — insert 100% just before the earliest block in window
-                        luckTrendData.unshift([startTime, 100]);
+                        // No prior block known — flat line at block's luck back to window start
+                        luckTrendData.unshift([startTime, blockLuckAtStart]);
+                        if (minTime < startTime) {
+                            luckTrendData.unshift([minTime, blockLuckAtStart]);
+                        }
                     }
                 }
                 
