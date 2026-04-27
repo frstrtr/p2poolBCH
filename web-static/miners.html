@@ -788,7 +788,8 @@
                             latency: workerData.latency != null ? workerData.latency : null,
                             latency_24h: workerData.latency_24h_avg != null ? workerData.latency_24h_avg : null,
                             last_submit_time: workerData.last_submit_time || null,
-                            submit_count: workerData.submit_count || 0
+                            submit_count: workerData.submit_count || 0,
+                            reconnect_nudges: workerData.reconnect_nudges || 0
                         });
                         minerGroups[baseAddress].totalHashrate += hashrate;
                         minerGroups[baseAddress].totalDoa += doa_hashrate;
@@ -1095,8 +1096,11 @@
                         } else {
                             submitText = Math.floor(submitAgo / 3600) + 'h ago'; submitClass = 'danger';
                         }
+                        var submitTitle = worker.last_submit_time
+                            ? ('Total submits this session: ' + worker.submit_count + (worker.reconnect_nudges > 0 ? ' | Pool sent reconnect nudge ' + worker.reconnect_nudges + 'x (miner was idle)' : ''))
+                            : 'No mining.submit received — pool has sent reconnect nudge ' + worker.reconnect_nudges + 'x';
                         row.append('td')
-                            .attr('title', worker.last_submit_time ? ('Total submits this session: ' + worker.submit_count) : 'No mining.submit received from this worker on this pool')
+                            .attr('title', submitTitle)
                             .attr('style', submitClass === 'danger' ? 'color: var(--danger)' : submitClass === 'warning' ? 'color: var(--warning)' : '')
                             .text(submitText);
                     });

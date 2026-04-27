@@ -30,6 +30,7 @@ class StratumRPCMiningProvider(object):
         self.desired_pseudoshare_target = None
         self._ping_active = False
         self._ping_call = None
+        self._last_reconnect_at = 0  # timestamp of last client.reconnect sent
 
     
     def rpc_subscribe(self, miner_version=None, session_id=None, *args):
@@ -59,20 +60,56 @@ class StratumRPCMiningProvider(object):
             self._ping_call = reactor.callLater(1, self._ping_once)  # first ping ~immediately
         return True
 
+    # How long a worker can be connected-but-silent before we nudge it to
+    # reconnect so it re-evaluates pool priorities (picks priority 1 = us).
+    _IDLE_RECONNECT_AFTER = 15 * 60   # 15 min idle threshold
+    _IDLE_RECONNECT_COOLDOWN = 15 * 60 # minimum gap between reconnect nudges
+
     def _ping_once(self):
         self._ping_call = None
         if not self._ping_active or not self.username:
             return
+
+        # ── idle-reconnect nudge ─────────────────────────────────────────────
+        # If the worker hasn't submitted a share here in _IDLE_RECONNECT_AFTER
+        # seconds, send client.reconnect so the miner drops and re-evaluates
+        # pool priorities.  Braiins OS / most ASIC firmware will reconnect to
+        # pool priority 1 (this node) after receiving client.reconnect.
+        now = time.time()
+        worker_info = self.wb.connected_workers.get(self.username)
+        if worker_info is not None:
+            last_submit = worker_info.get('last_submit_time', 0)
+            connected_since = worker_info.get('since', now)
+            idle_secs = now - last_submit if last_submit else now - connected_since
+            cooldown_ok = now - self._last_reconnect_at > self._IDLE_RECONNECT_COOLDOWN
+            if idle_secs >= self._IDLE_RECONNECT_AFTER and cooldown_ok:
+                self._last_reconnect_at = now
+                worker_info['reconnect_nudges'] = worker_info.get('reconnect_nudges', 0) + 1
+                try:
+                    port = self.transport.getHost().port
+                except Exception:
+                    port = 9348
+                # Send graceful client.reconnect; firmware will reconnect and
+                # re-evaluate priority list — priority 1 (this pool) wins.
+                self.other.svc_client.rpc_reconnect('', port, 0).addErrback(
+                    lambda err: self.transport.loseConnection()
+                    # If miner doesn't support client.reconnect, force-drop TCP.
+                    # The miner will reconnect immediately and pick priority 1.
+                )
+                if self._ping_active:
+                    self._ping_call = reactor.callLater(300, self._ping_once)
+                return  # skip latency ping this cycle
+
         t0 = time.time()
         d = self.other.svc_client.rpc_get_version()
         def on_response(result):
             rtt = time.time() - t0
             now_t = time.time()
-            worker_info = self.wb.connected_workers.get(self.username)
-            if worker_info is not None:
+            w_info = self.wb.connected_workers.get(self.username)
+            if w_info is not None:
                 alpha = 0.2
-                prev = worker_info.get('latency', rtt)
-                worker_info['latency'] = alpha * rtt + (1.0 - alpha) * prev
+                prev = w_info.get('latency', rtt)
+                w_info['latency'] = alpha * rtt + (1.0 - alpha) * prev
             # append to 24h history (persists across reconnects)
             hist = self.wb.worker_latency_history.setdefault(self.username, [])
             hist.append((now_t, rtt))
