@@ -33,6 +33,64 @@ For Telegram bot setup and usage, see `TELEGRAM_BOT.md`.
 
 ---
 
+**Quick start: Docker + Telegram bot (new user)**
+
+Everything you need to run your own p2pool-BCH node with Telegram notifications,
+using the pre-built GHCR image — no compilation required.
+
+**Prerequisites**
+- A running **Bitcoin Cash Node (BCHN)** with JSON-RPC enabled.  
+  In `bitcoin.conf`:
+  ```
+  server=1
+  rpcuser=YOUR_RPC_USER
+  rpcpassword=YOUR_RPC_PASS
+  rpcallowip=0.0.0.0/0    # tighten to your Docker subnet in production
+  ```
+- **Docker** installed on the host.
+- A **Telegram bot token** — message [@BotFather](https://t.me/BotFather), send `/newbot`,
+  follow the prompts, and copy the token it gives you (`123456:ABC-DEF...`).
+
+**Steps**
+
+1. Pull the image:
+   ```bash
+   docker pull ghcr.io/frstrtr/p2poolbch:latest
+   ```
+
+2. Run it (replace the placeholder values):
+   ```bash
+   docker run -d --restart unless-stopped \
+     --network host \
+     -e RPC_HOST=<BCHN_IP> \
+     -e RPC_USER=<rpcuser> \
+     -e RPC_PASS=<rpcpassword> \
+     -e PAYOUT_ADDRESS=<your_BCH_address> \
+     -e BOT_TOKEN=<token_from_BotFather> \
+     --name p2pool-bch \
+     ghcr.io/frstrtr/p2poolbch:latest
+   ```
+   > Use `--network host` when p2pool and BCHN run on the same machine or LAN.  
+   > For bridge networking add `-p 9348:9348 -p 9349:9349` instead.
+
+3. Verify it started:
+   ```bash
+   docker logs -f p2pool-bch
+   ```
+   You should see `...success!` for both the RPC and P2P BCHN connections,
+   followed by `Telegram bot started`.
+
+4. Open Telegram, find your bot by the username you gave BotFather, and send `/start`.
+   - Tap **📝 Set mining address** and enter your BCH address.
+   - Toggle notifications on/off with the inline buttons.
+   - Point your miner at `<host_ip>:9348` (stratum).
+
+5. *(Optional)* Forward port **9349** on your router to the host for better P2P peer connectivity.
+
+See `TELEGRAM_BOT.md` for the full bot reference (broadcast channels, env-var list, troubleshooting).
+
+---
+
 **P2pool installation with pypy -- Windows**
 
 
