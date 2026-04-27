@@ -122,22 +122,51 @@ class StratumRPCMiningProvider(object):
                 self._ping_call = reactor.callLater(300, self._ping_once)
         def on_error(err):
             if err.check(defer.TimeoutError):
-                # Miner silently ignored client.get_version (common on bitaxe /
-                # ESP-Miner).  Fall back to the device's own HTTP API which
-                # reports responseTime (ms) — the RTT it measured to the pool.
+                # Miner silently ignored client.get_version (stock Antminer,
+                # ESP-Miner/bitaxe, some Whatsminer fw).
+                # Fallback chain:
+                #   1. HTTP GET /api/system/info (bitaxe reports responseTime)
+                #   2. Any HTTP response → use HTTP request time as RTT proxy
+                #   3. HTTP fails → TCP connect to port 4028 (CGMiner API,
+                #      open on Antminer/Avalon/most ASICs, no auth required)
+                #   4. All fail → skip (latency stays '-')
                 ip = self.wb.connected_workers.get(self.username or '', {}).get('ip')
                 if ip:
+                    http_t0 = [time.time()]
                     url = ('http://%s/api/system/info' % ip).encode('ascii')
-                    http_d = web_client.getPage(url, timeout=5)
+                    http_d = web_client.getPage(url, timeout=3)
                     def _on_http(data):
+                        # bitaxe reports its own measured pool RTT
                         try:
                             rt_ms = json.loads(data).get('responseTime')
                             if rt_ms is not None:
                                 _record_rtt(float(rt_ms) / 1000.0)
+                                return
                         except Exception:
                             pass
+                        # Any other miner with a 200 response: use HTTP RTT
+                        _record_rtt(time.time() - http_t0[0])
+                    def _on_http_err(e):
+                        from twisted.web import error as web_error
+                        if e.check(web_error.Error):
+                            # Got an HTTP error response (401/302/404 etc.) —
+                            # TCP handshake succeeded so HTTP time is valid RTT
+                            _record_rtt(time.time() - http_t0[0])
+                        else:
+                            # Port 80 not open or timed out — try TCP connect
+                            # to port 4028 (CGMiner API, open on most ASICs)
+                            tcp_t0 = [time.time()]
+                            _ip = ip  # close over loop-safe copy
+                            class _RTTProto(protocol.Protocol):
+                                def connectionMade(self):
+                                    _record_rtt(time.time() - tcp_t0[0])
+                                    self.transport.loseConnection()
+                            class _RTTFactory(protocol.ClientFactory):
+                                def buildProtocol(self, addr): return _RTTProto()
+                                def clientConnectionFailed(self, c, r): pass
+                            reactor.connectTCP(_ip, 4028, _RTTFactory(), timeout=3)
                     http_d.addCallback(_on_http)
-                    http_d.addErrback(lambda e: None)  # HTTP not available — skip
+                    http_d.addErrback(_on_http_err)
             else:
                 # Miner returned a JSON-RPC error response — still a valid
                 # network round-trip, so record the RTT.
