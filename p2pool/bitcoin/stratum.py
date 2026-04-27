@@ -1,8 +1,10 @@
+import json
 import random
 import sys
 import time
 
-from twisted.internet import protocol, reactor
+from twisted.internet import defer, protocol, reactor
+from twisted.web import client as web_client
 from twisted.python import log
 
 from p2pool.bitcoin import data as bitcoin_data, getwork
@@ -119,9 +121,27 @@ class StratumRPCMiningProvider(object):
             if self._ping_active:
                 self._ping_call = reactor.callLater(300, self._ping_once)
         def on_error(err):
-            # miner replied with an error (method unsupported) — still a
-            # valid round-trip, so record the RTT anyway
-            _record_rtt(time.time() - t0)
+            if err.check(defer.TimeoutError):
+                # Miner silently ignored client.get_version (common on bitaxe /
+                # ESP-Miner).  Fall back to the device's own HTTP API which
+                # reports responseTime (ms) — the RTT it measured to the pool.
+                ip = self.wb.connected_workers.get(self.username or '', {}).get('ip')
+                if ip:
+                    url = ('http://%s/api/system/info' % ip).encode('ascii')
+                    http_d = web_client.getPage(url, timeout=5)
+                    def _on_http(data):
+                        try:
+                            rt_ms = json.loads(data).get('responseTime')
+                            if rt_ms is not None:
+                                _record_rtt(float(rt_ms) / 1000.0)
+                        except Exception:
+                            pass
+                    http_d.addCallback(_on_http)
+                    http_d.addErrback(lambda e: None)  # HTTP not available — skip
+            else:
+                # Miner returned a JSON-RPC error response — still a valid
+                # network round-trip, so record the RTT.
+                _record_rtt(time.time() - t0)
             if self._ping_active:
                 self._ping_call = reactor.callLater(300, self._ping_once)
         d.addCallbacks(on_response, on_error)
