@@ -312,6 +312,10 @@ Send `/start` to the bot. Set your BCH mining address via the **📝 Set mining 
 then toggle individual alert types (connect, disconnect, share, block) with the inline buttons.
 Alerts are matched by address — you receive only events for the address you registered.
 
+If the address format is invalid the bot will explain the error and ask you to try again.
+If the address is valid but not yet mining on this node, the bot warns you and offers
+**💾 Save anyway** (you'll get alerts when the miner connects) or **✏️ Different address**.
+
 ### Standalone bot (without --run-bot)
 
 If you prefer to run the bot independently, use `telegram_bot/bot.service`:

@@ -149,6 +149,20 @@ inline buttons — no other commands are needed.
 Addresses are matched exactly. Cashaddr format (`bitcoincash:q...`) and
 legacy format (`1...`) are both accepted.
 
+When you send an address the bot validates it in two stages:
+
+1. **Format check** — if the address doesn't match a recognised BCH
+   format, the bot explains the error and asks you to try again.
+2. **Activity check** — the bot queries the node's `/miner_stats` API. If
+   the address has no active hashrate yet, you see a warning and two
+   inline buttons:
+   - **💾 Save anyway** — stores the address; you'll get alerts as soon
+     as the miner connects.
+   - **✏️ Different address** — go back and enter a different address.
+
+   If the API is unreachable (e.g. p2pool is still starting up) the bot
+   saves the address immediately without warning.
+
 ---
 
 ## Broadcast channel
