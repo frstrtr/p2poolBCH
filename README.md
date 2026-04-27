@@ -96,17 +96,53 @@ You'll also need to install and run your bitcoind or altcoind of choice, and edi
 
 >pypy run_p2pool.py
 
-**P2pool Dockerfile
+**Docker (recommended for containerised deployments)**
 
-The Dockerfile uses the build instruction above to create a Docker image.
+The included multi-stage `Dockerfile` builds a self-contained image with PyPy 2.7, a locally-compiled OpenSSL 1.1, and an optional Telegram bot venv.  All p2pool settings are passed via environment variables — no config file editing required.
 
-Build Docker image named `p2pool`
+Build the image:
 
->docker build -t p2pool ./
+```bash
+docker build -t p2pool-bch .
+```
 
-Run p2pool from Docker image
+Run against a remote BCHN node:
 
->docker run -it --rm p2pool --version
+```bash
+docker run -d --restart unless-stopped \
+  -e RPC_HOST=192.168.86.110 \
+  -e RPC_USER=bitcoinrpc \
+  -e RPC_PASS=YOURPASS \
+  -e PAYOUT_ADDRESS=YOUR_BCH_ADDRESS \
+  -e NETWORK=bitcoincash \
+  -p 9348:9348 \
+  -p 9349:9349 \
+  --name p2pool-bch \
+  p2pool-bch
+```
+
+Key environment variables (`docker-entrypoint.sh`):
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `RPC_HOST` | ✓ | — | bitcoind hostname or IP |
+| `RPC_USER` | ✓ | — | bitcoind RPC username |
+| `RPC_PASS` | ✓ | — | bitcoind RPC password |
+| `PAYOUT_ADDRESS` | — | `dynamic` | BCH payout address; `dynamic` = use miner login name |
+| `NETWORK` | — | `bitcoincash` | p2pool network (e.g. `bitcoincash_testnet`) |
+| `WORKER_PORT` | — | `9348` | Stratum + web UI port |
+| `P2POOL_PORT` | — | `9349` | p2pool P2P network port |
+| `NODE_NAME` | — | hostname | Human-readable node label in shares |
+| `BOT_TOKEN` | — | — | Telegram bot token (or mount `/etc/p2pool-bot.env`) |
+| `P2POOL_EXTRA_ARGS` | — | — | Extra flags appended verbatim to the command line |
+
+Ports: **9348** (stratum/web UI — miners connect here), **9349** (p2pool P2P — forward from router for better peer connectivity).
+
+Smoke test:
+
+```bash
+docker run --rm p2pool-bch pypy run_p2pool.py --help
+```
 
 **jtoomimnet vs mainnet**
 
