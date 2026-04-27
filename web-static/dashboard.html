@@ -4763,12 +4763,14 @@
                 }
                 
                 if (lastBlockBeforeWindow) {
-                    // Use time-based luck estimate: 100% * targetBlockTime / elapsedTime
                     var refTs = lastBlockBeforeWindow.ts * 1000;
-                    var luckAtMin = (minTime > refTs && targetBlockTimeMs > 0) ? 100 * targetBlockTimeMs / (minTime - refTs) : 100;
                     var luckAtMax = (graphCurrentLuckTrend !== null && graphCurrentLuckTrend > 0)
                         ? graphCurrentLuckTrend
                         : ((maxTime > refTs && targetBlockTimeMs > 0) ? 100 * targetBlockTimeMs / (maxTime - refTs) : 100);
+                    // Derive luckAtMin proportionally: luck ∝ 1/elapsed, so scale from current value
+                    var luckAtMin = (luckAtMax > 0 && maxTime > refTs && minTime > refTs)
+                        ? luckAtMax * (maxTime - refTs) / (minTime - refTs)
+                        : luckAtMax;
                     luckTrendData.push([minTime, luckAtMin]);
                     luckTrendData.push([maxTime, luckAtMax]);
                     validLucks.push(luckAtMax); // Include current round in avg luck
@@ -5487,12 +5489,14 @@
                 }
                 
                 if (lastBlockBeforeWindow) {
-                    // Use time-based luck estimate: 100% * targetBlockTime / elapsedTime
                     var refTs = lastBlockBeforeWindow.ts * 1000;
-                    var luckAtMin = (minTime > refTs && targetBlockTimeMs > 0) ? 100 * targetBlockTimeMs / (minTime - refTs) : 100;
                     var luckAtMax = (graphCurrentLuckTrend !== null && graphCurrentLuckTrend > 0)
                         ? graphCurrentLuckTrend
                         : ((maxTime > refTs && targetBlockTimeMs > 0) ? 100 * targetBlockTimeMs / (maxTime - refTs) : 100);
+                    // Derive luckAtMin proportionally: luck ∝ 1/elapsed, so scale from current value
+                    var luckAtMin = (luckAtMax > 0 && maxTime > refTs && minTime > refTs)
+                        ? luckAtMax * (maxTime - refTs) / (minTime - refTs)
+                        : luckAtMax;
                     luckTrendData.push([minTime, luckAtMin]);
                     luckTrendData.push([maxTime, luckAtMax]);
                     validLucks.push(luckAtMax); // Include current round in avg luck
