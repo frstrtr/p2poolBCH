@@ -102,7 +102,7 @@ class StratumRPCMiningProvider(object):
             getwork._swap4(pack.IntType(32).pack(x['timestamp'])).encode('hex'), # ntime
             True, # clean_jobs
         ).addErrback(lambda err: None)
-        self.handler_map[jobid] = x, got_response
+        self.handler_map[jobid] = (x, got_response, time.time())
     
     def rpc_submit(self, worker_name, job_id, extranonce2, ntime, nonce, version_bits = None, *args):
         #asicboost: version_bits is the version mask that the miner used
@@ -111,7 +111,14 @@ class StratumRPCMiningProvider(object):
             print >>sys.stderr, '''Couldn't link returned work's job id with its handler. This should only happen if this process was recently restarted!'''
             #self.other.svc_client.rpc_reconnect().addErrback(lambda err: None)
             return False
-        x, got_response = self.handler_map[job_id]
+        x, got_response, sent_at = self.handler_map[job_id]
+        # Update per-worker share response time EMA in connected_workers
+        share_response_time = time.time() - sent_at
+        worker_info = self.wb.connected_workers.get(worker_name)
+        if worker_info is not None:
+            alpha = 0.2
+            prev = worker_info.get('latency', share_response_time)
+            worker_info['latency'] = alpha * share_response_time + (1.0 - alpha) * prev
         coinb_nonce = extranonce2.decode('hex')
         assert len(coinb_nonce) == self.wb.COINBASE_NONCE_LENGTH
         new_packed_gentx = x['coinb1'] + coinb_nonce + x['coinb2']
