@@ -44,6 +44,7 @@ class WorkerBridge(worker_interface.WorkerBridge):
         self.connected_workers = {}  # username -> {'address': addr, 'ip': ip, 'since': timestamp}
         self.worker_shares = {}        # username -> {'accepted': n, 'rejected': n}
         self.total_shares = {'accepted': 0, 'rejected': 0}
+        self.worker_latency_history = {}  # username -> [(timestamp, rtt_s), ...]  24h rolling
 
         @self.worker_connected.watch
         def _(username, address, peer_ip):

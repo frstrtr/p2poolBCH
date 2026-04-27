@@ -323,6 +323,9 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                     if not last_diff:
                         continue  # connected but never submitted here — mining elsewhere
                     ws = wb.worker_shares.get(worker_name, {})
+                    _hist0 = wb.worker_latency_history.get(worker_name, [])
+                    _recent0 = [r for ts, r in _hist0]
+                    _24h_avg0 = sum(_recent0) / len(_recent0) if _recent0 else None
                     formatted_workers[worker_name] = {
                         'hash_rate': 0,
                         'dead_hash_rate': 0,
@@ -336,6 +339,7 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                         'backup_connections': 0,
                         'connection_difficulties': [last_diff] if last_diff else [],
                         'latency': info.get('latency', None),
+                        'latency_24h_avg': _24h_avg0,
                         'merged_addresses': {},
                         'merged_auto_converted': False,
                         'merged_redistributed': False,
@@ -348,6 +352,9 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                 last_diff = wb.connected_workers.get(worker_name, {}).get('last_diff', 0)
                 first_seen = wb.connected_workers.get(worker_name, {}).get('since', start_time)
                 ws = wb.worker_shares.get(worker_name, {})
+                _hist = wb.worker_latency_history.get(worker_name, [])
+                _recent = [r for ts, r in _hist]
+                _24h_avg = sum(_recent) / len(_recent) if _recent else None
                 formatted_workers[worker_name] = {
                     'hash_rate': hr,
                     'dead_hash_rate': doa,
@@ -361,6 +368,7 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                     'backup_connections': 0,
                     'connection_difficulties': [last_diff] if last_diff else [],
                     'latency': wb.connected_workers.get(worker_name, {}).get('latency', None),
+                    'latency_24h_avg': _24h_avg,
                     'merged_addresses': {},
                     'merged_auto_converted': False,
                     'merged_redistributed': False,
