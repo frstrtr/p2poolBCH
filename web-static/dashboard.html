@@ -1514,7 +1514,8 @@
                                 <th title="Last pseudoshare received">Last Seen</th>
                                 <th title="Dead on Arrival rate">DOA Rate</th>
                                 <th title="Predicted payout if block found now">Predicted Payout</th>
-                                <th title="Predicted merged mining payout if block found now">Merged Payout</th>
+                                <th title="Average hashrate over last 12 hours">12h Avg</th>
+                                <th title="Average hashrate over last 24 hours">24h Avg</th>
                             </tr>
                         </thead>
                         <tbody></tbody>
@@ -2067,22 +2068,34 @@
                 
                 if (display.length === 0) {
                     d3.select('#active_miners tbody').append('tr').append('td')
-                        .attr('colspan', '8')
+                        .attr('colspan', '9')
                         .attr('style', 'text-align: center; color: #888;')
                         .text(showHistorical ? 'No miners found' : 'No miners currently connected via stratum');
                     return;
                 }
                 
-                // Fetch payout data (both main chain and merged)
+                // Fetch payout data and historical hashrate log
                 d3.json('../current_payouts', function(payouts_data) {
-                d3.json('../current_merged_payouts', function(merged_payouts_data) {
+                d3.json('../web/log', function(stat_log_data) {
                 var payouts = {};
                 if (payouts_data) {
                     for (var addr in payouts_data) {
                         payouts[addr] = payouts_data[addr];
                     }
                 }
-                var mergedPayouts = merged_payouts_data || {};
+                // Compute 12h/24h average hashrates from stat log (sampled every 5 min)
+                var _now = Date.now() / 1000;
+                var entries12 = (stat_log_data || []).filter(function(e) { return _now - e.time <= 12*3600; });
+                var entries24 = (stat_log_data || []).filter(function(e) { return _now - e.time <= 24*3600; });
+                function avgHashrate(workerNames, entries) {
+                    if (entries.length === 0) return 0;
+                    var sum = 0;
+                    entries.forEach(function(entry) {
+                        if (!entry.local_hash_rates) return;
+                        workerNames.forEach(function(wname) { sum += entry.local_hash_rates[wname] || 0; });
+                    });
+                    return sum / entries.length;
+                }
                 
                 var tbody = d3.select('#active_miners tbody');
                 
@@ -2214,7 +2227,7 @@
                     }
                     
                     // Pseudoshare Difficulty (max across workers)
-                    minerRow.append('td').text(d3.format('.2f')(miner.maxDifficulty));
+                    minerRow.append('td').text(format_difficulty(miner.maxDifficulty));
                     
                     // Time to Share - calculated from hashrate and attempts_to_share
                     var timeToShare = '∞';
@@ -2251,17 +2264,12 @@
                     var payoutSymbol = (currency_info && currency_info.symbol) || 'COIN';
                     minerRow.append('td').text(d3.format('.4f')(payout) + ' ' + payoutSymbol);
                     
-                    // Merged payout
-                    var mergedEntry = mergedPayouts[miner.address];
-                    var mergedPayoutCell = minerRow.append('td');
-                    if (mergedEntry && mergedEntry.merged && mergedEntry.merged.length > 0) {
-                        var mp = mergedEntry.merged[0];
-                        mergedPayoutCell
-                            .style('color', '#c3a634')
-                            .text(d3.format(',.2f')(mp.amount) + ' ' + (mp.symbol || 'DOGE'));
-                    } else {
-                        mergedPayoutCell.style('color', '#666').text('-');
-                    }
+                    // 12h / 24h average hashrate
+                    var workerNames = miner.workers.map(function(w) { return w.name; });
+                    var hr12 = avgHashrate(workerNames, entries12);
+                    var hr24 = avgHashrate(workerNames, entries24);
+                    minerRow.append('td').text(hr12 > 0 ? format_hashrate(hr12) : '-');
+                    minerRow.append('td').text(hr24 > 0 ? format_hashrate(hr24) : '-');
                     
                     // Create worker rows (initially hidden)
                     miner.workers.forEach(function(worker, widx) {
@@ -2302,7 +2310,7 @@
                             workerHashrateCell.text('-');
                         }
                         
-                        workerRow.append('td').text(d3.format('.2f')(worker.difficulty));
+                        workerRow.append('td').text(format_difficulty(worker.difficulty));
                         
                         // Time to share for this worker
                         var workerTimeToShare = '∞';
@@ -2331,8 +2339,11 @@
                         
                         var doaPercent = worker.hashrate > 0 ? worker.doa_hashrate / worker.hashrate : 0;
                         workerRow.append('td').text(d3.format('.2%')(doaPercent));
-                        workerRow.append('td').text('-');
-                        workerRow.append('td').text('-');
+                        workerRow.append('td').text('-'); // payout not shown per worker
+                        var w12h = avgHashrate([worker.name], entries12);
+                        var w24h = avgHashrate([worker.name], entries24);
+                        workerRow.append('td').text(w12h > 0 ? format_hashrate(w12h) : '-');
+                        workerRow.append('td').text(w24h > 0 ? format_hashrate(w24h) : '-');
                     });
                 });
                 });
