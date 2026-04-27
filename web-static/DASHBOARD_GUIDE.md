@@ -143,12 +143,13 @@ Miners currently connected to *this* node's stratum. Rows are grouped by payout 
 |--------|-------------|
 | Address / Worker | Payout address (collapsed) or worker name (expanded) |
 | Hashrate | Current rate based on pseudoshares |
-| Pseudo Diff | Pseudoshare difficulty (local work assignment) |
+| Pseudo Diff | Pseudoshare difficulty (e.g. `372`, `2.44 K`) — vardiff-assigned work per share |
 | Time to Share | Estimated time to find next valid p2pool share |
 | Last Seen | Time since last pseudoshare received |
 | DOA Rate | Dead-on-arrival share percentage |
 | Predicted Payout | Estimated BCH payout if block found now |
-| Merged Payout | Estimated merged-mining payout if block found now |
+| 12h Avg | Average hashrate over the last 12 hours (from stat log) |
+| 24h Avg | Average hashrate over the last 24 hours (from stat log) |
 
 Enable **Show historical** to include miners who have disconnected but submitted shares recently.
 
