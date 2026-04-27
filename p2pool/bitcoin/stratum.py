@@ -28,6 +28,8 @@ class StratumRPCMiningProvider(object):
         self.share_rate = wb.share_rate
         self.fixed_target = False
         self.desired_pseudoshare_target = None
+        self._ping_active = False
+        self._ping_call = None
 
     
     def rpc_subscribe(self, miner_version=None, session_id=None, *args):
@@ -52,7 +54,31 @@ class StratumRPCMiningProvider(object):
         except:
             pass
         reactor.callLater(0, self._send_work)
+        if not self._ping_active:
+            self._ping_active = True
+            self._ping_call = reactor.callLater(5, self._ping_once)
         return True
+
+    def _ping_once(self):
+        self._ping_call = None
+        if not self._ping_active or not self.username:
+            return
+        t0 = time.time()
+        d = self.other.svc_client.rpc_get_version()
+        def on_response(result):
+            rtt = time.time() - t0
+            worker_info = self.wb.connected_workers.get(self.username)
+            if worker_info is not None:
+                alpha = 0.2
+                prev = worker_info.get('latency', rtt)
+                worker_info['latency'] = alpha * rtt + (1.0 - alpha) * prev
+            if self._ping_active:
+                self._ping_call = reactor.callLater(30, self._ping_once)
+        def on_error(err):
+            # miner does not support client.get_version — reschedule silently
+            if self._ping_active:
+                self._ping_call = reactor.callLater(30, self._ping_once)
+        d.addCallbacks(on_response, on_error)
 
     def rpc_configure(self, extensions, extensionParameters):
         #extensions is a list of extension codes defined in BIP310
@@ -102,7 +128,7 @@ class StratumRPCMiningProvider(object):
             getwork._swap4(pack.IntType(32).pack(x['timestamp'])).encode('hex'), # ntime
             True, # clean_jobs
         ).addErrback(lambda err: None)
-        self.handler_map[jobid] = (x, got_response, time.time())
+        self.handler_map[jobid] = x, got_response
     
     def rpc_submit(self, worker_name, job_id, extranonce2, ntime, nonce, version_bits = None, *args):
         #asicboost: version_bits is the version mask that the miner used
@@ -111,14 +137,7 @@ class StratumRPCMiningProvider(object):
             print >>sys.stderr, '''Couldn't link returned work's job id with its handler. This should only happen if this process was recently restarted!'''
             #self.other.svc_client.rpc_reconnect().addErrback(lambda err: None)
             return False
-        x, got_response, sent_at = self.handler_map[job_id]
-        # Update per-worker share response time EMA in connected_workers
-        share_response_time = time.time() - sent_at
-        worker_info = self.wb.connected_workers.get(worker_name)
-        if worker_info is not None:
-            alpha = 0.2
-            prev = worker_info.get('latency', share_response_time)
-            worker_info['latency'] = alpha * share_response_time + (1.0 - alpha) * prev
+        x, got_response = self.handler_map[job_id]
         coinb_nonce = extranonce2.decode('hex')
         assert len(coinb_nonce) == self.wb.COINBASE_NONCE_LENGTH
         new_packed_gentx = x['coinb1'] + coinb_nonce + x['coinb2']
@@ -165,6 +184,10 @@ class StratumRPCMiningProvider(object):
 
     
     def close(self):
+        self._ping_active = False
+        if self._ping_call is not None and self._ping_call.active():
+            self._ping_call.cancel()
+            self._ping_call = None
         self.wb.new_work_event.unwatch(self.watch_id)
 
 class StratumProtocol(jsonrpc.LineBasedPeer):
