@@ -316,10 +316,12 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
         try:
             miner_hash_rates, miner_dead_hash_rates = wb.get_local_rates()
             formatted_workers = {}
-            # Include workers with live connections even if no shares submitted yet
+            # Include workers with live connections that have submitted at least one share
             for worker_name, info in wb.connected_workers.iteritems():
                 if worker_name not in miner_hash_rates:
                     last_diff = info.get('last_diff', 0)
+                    if not last_diff:
+                        continue  # connected but never submitted here — mining elsewhere
                     ws = wb.worker_shares.get(worker_name, {})
                     formatted_workers[worker_name] = {
                         'hash_rate': 0,
@@ -340,6 +342,8 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                         'merged_reverse_converted': False,
                     }
             for worker_name, hr in miner_hash_rates.iteritems():
+                if worker_name not in wb.connected_workers:
+                    continue  # disconnected; stale rate-monitor data
                 doa = miner_dead_hash_rates.get(worker_name, 0)
                 last_diff = wb.connected_workers.get(worker_name, {}).get('last_diff', 0)
                 first_seen = wb.connected_workers.get(worker_name, {}).get('since', start_time)

@@ -73,11 +73,11 @@ class StratumRPCMiningProvider(object):
                 prev = worker_info.get('latency', rtt)
                 worker_info['latency'] = alpha * rtt + (1.0 - alpha) * prev
             if self._ping_active:
-                self._ping_call = reactor.callLater(30, self._ping_once)
+                self._ping_call = reactor.callLater(60, self._ping_once)
         def on_error(err):
             # miner does not support client.get_version — reschedule silently
             if self._ping_active:
-                self._ping_call = reactor.callLater(30, self._ping_once)
+                self._ping_call = reactor.callLater(60, self._ping_once)
         d.addCallbacks(on_response, on_error)
 
     def rpc_configure(self, extensions, extensionParameters):
