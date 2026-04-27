@@ -786,7 +786,9 @@
                             connections: workerData.connections || 0,
                             last_seen: workerData.last_seen || 0,
                             latency: workerData.latency != null ? workerData.latency : null,
-                            latency_24h: workerData.latency_24h_avg != null ? workerData.latency_24h_avg : null
+                            latency_24h: workerData.latency_24h_avg != null ? workerData.latency_24h_avg : null,
+                            last_submit_time: workerData.last_submit_time || null,
+                            submit_count: workerData.submit_count || 0
                         });
                         minerGroups[baseAddress].totalHashrate += hashrate;
                         minerGroups[baseAddress].totalDoa += doa_hashrate;
@@ -1059,6 +1061,7 @@
                     thead.append('th').text('DOA Rate');
                     thead.append('th').attr('title', 'Network round-trip time (RTT) via client.get_version ping, measured every 5 min').text('Latency');
                     thead.append('th').attr('title', '24-hour average RTT (all pings recorded over the past 24h)').text('24h Avg');
+                    thead.append('th').attr('title', 'Time since last mining.submit arrived at this pool — helps diagnose connected-but-silent workers').text('Last Submit');
                     
                     var tbody = table.append('tbody');
                     miner.workers.forEach(function(worker) {
@@ -1080,6 +1083,22 @@
                         row.append('td').attr('title', worker.latency != null ? 'RTT ' + d3.format('.1f')(worker.latency * 1000) + ' ms (≈' + d3.format('.0f')(worker.latency * 500) + ' ms one-way)' : 'Waiting for first ping (measured on connect, then every 5 min)').text(latencyText);
                         var avg24Text = worker.latency_24h != null ? d3.format('.0f')(worker.latency_24h * 1000) + ' ms' : '-';
                         row.append('td').attr('title', worker.latency_24h != null ? '24h avg RTT ' + d3.format('.1f')(worker.latency_24h * 1000) + ' ms' : 'No 24h data yet').text(avg24Text);
+                        var now_t = Date.now() / 1000;
+                        var submitAgo = worker.last_submit_time ? (now_t - worker.last_submit_time) : null;
+                        var submitText, submitClass;
+                        if (submitAgo === null) {
+                            submitText = 'never'; submitClass = 'danger';
+                        } else if (submitAgo < 60) {
+                            submitText = Math.floor(submitAgo) + 's ago'; submitClass = 'success';
+                        } else if (submitAgo < 3600) {
+                            submitText = Math.floor(submitAgo / 60) + 'm ago'; submitClass = 'warning';
+                        } else {
+                            submitText = Math.floor(submitAgo / 3600) + 'h ago'; submitClass = 'danger';
+                        }
+                        row.append('td')
+                            .attr('title', worker.last_submit_time ? ('Total submits this session: ' + worker.submit_count) : 'No mining.submit received from this worker on this pool')
+                            .attr('style', submitClass === 'danger' ? 'color: var(--danger)' : submitClass === 'warning' ? 'color: var(--warning)' : '')
+                            .text(submitText);
                     });
                 }
             });

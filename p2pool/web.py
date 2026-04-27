@@ -344,6 +344,8 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                         'connection_difficulties': [last_diff] if last_diff else [],
                         'latency': info.get('latency', None),
                         'latency_24h_avg': _24h_avg0,
+                        'last_submit_time': info.get('last_submit_time', None),
+                        'submit_count': info.get('submit_count', 0),
                         'merged_addresses': {},
                         'merged_auto_converted': False,
                         'merged_redistributed': False,
@@ -359,6 +361,7 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                 _hist = wb.worker_latency_history.get(worker_name, [])
                 _recent = [r for ts, r in _hist]
                 _24h_avg = sum(_recent) / len(_recent) if _recent else None
+                _info = wb.connected_workers.get(worker_name, {})
                 formatted_workers[worker_name] = {
                     'hash_rate': hr,
                     'dead_hash_rate': doa,
@@ -371,8 +374,10 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                     'active_connections': 1,
                     'backup_connections': 0,
                     'connection_difficulties': [last_diff] if last_diff else [],
-                    'latency': wb.connected_workers.get(worker_name, {}).get('latency', None),
+                    'latency': _info.get('latency', None),
                     'latency_24h_avg': _24h_avg,
+                    'last_submit_time': _info.get('last_submit_time', None),
+                    'submit_count': _info.get('submit_count', 0),
                     'merged_addresses': {},
                     'merged_auto_converted': False,
                     'merged_redistributed': False,

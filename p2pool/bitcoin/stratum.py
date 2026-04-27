@@ -140,6 +140,11 @@ class StratumRPCMiningProvider(object):
     def rpc_submit(self, worker_name, job_id, extranonce2, ntime, nonce, version_bits = None, *args):
         #asicboost: version_bits is the version mask that the miner used
         worker_name = worker_name.strip()
+        # Track every submit attempt (regardless of accept/reject) for diagnostics
+        worker_info = self.wb.connected_workers.get(worker_name)
+        if worker_info is not None:
+            worker_info['last_submit_time'] = time.time()
+            worker_info['submit_count'] = worker_info.get('submit_count', 0) + 1
         if job_id not in self.handler_map:
             print >>sys.stderr, '''Couldn't link returned work's job id with its handler. This should only happen if this process was recently restarted!'''
             #self.other.svc_client.rpc_reconnect().addErrback(lambda err: None)

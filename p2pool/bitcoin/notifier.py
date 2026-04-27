@@ -16,8 +16,13 @@ Wire format (POST body, JSON):
 import json
 import time
 
+from twisted.internet import reactor
 from twisted.python import log
 from twisted.web.client import getPage
+
+# Grace period before a disconnect notification is sent.
+# If the worker reconnects within this window the alert is suppressed.
+_DISCONNECT_GRACE = 60  # seconds
 
 
 class LocalEventPusher(object):
@@ -25,6 +30,8 @@ class LocalEventPusher(object):
         # bot_url: e.g. "http://127.0.0.1:9349"
         self._url = str(bot_url).rstrip('/') + '/event'
         self._node = node_name
+        # username -> (DelayedCall, payload) for pending disconnect alerts
+        self._pending_disconnect = {}
 
     def _push(self, payload):
         payload['node'] = self._node
@@ -42,12 +49,27 @@ class LocalEventPusher(object):
         ))
 
     def on_worker_connected(self, username, address, ip):
+        # Cancel any pending disconnect notification for this worker
+        pending = self._pending_disconnect.pop(username, None)
+        if pending is not None:
+            dc, _ = pending
+            if dc.active():
+                dc.cancel()
+                return  # suppressed: reconnect within grace window
         self._push({'type': 'worker_connected', 'username': username,
                     'address': address, 'ip': ip})
 
     def on_worker_disconnected(self, username, address, ip):
-        self._push({'type': 'worker_disconnected', 'username': username,
-                    'address': address, 'ip': ip})
+        # Don't send immediately — wait for grace period
+        if username in self._pending_disconnect:
+            return  # already queued
+        payload = {'type': 'worker_disconnected', 'username': username,
+                   'address': address, 'ip': ip}
+        def _fire():
+            self._pending_disconnect.pop(username, None)
+            self._push(payload)
+        dc = reactor.callLater(_DISCONNECT_GRACE, _fire)
+        self._pending_disconnect[username] = (dc, payload)
 
     def on_share_found(self, username, address, share_hash, dead):
         self._push({'type': 'share_found', 'username': username,
