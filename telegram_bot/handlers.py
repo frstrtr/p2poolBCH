@@ -32,17 +32,36 @@ from telegram.ext import (
     filters,
 )
 
+import aiohttp
+
 from . import subscriptions
-from .keyboards import build_main_menu, build_unsub_confirm
+from .keyboards import build_main_menu, build_unsub_confirm, build_inactive_confirm
 
 IDLE = 0
 AWAIT_ADDR = 1
+CONFIRM_INACTIVE = 2
 
 # Very permissive BCH address regex: accept cashaddr (bitcoincash:q...) and
 # legacy (1... / 3...) — we just store whatever the user sends.
 _ADDR_RE = re.compile(
     r'^(bitcoincash:[a-z0-9]{42,}|[13][a-zA-Z0-9]{25,34})$'
 )
+
+
+async def _check_addr_active(addr: str) -> bool:
+    """Query the local p2pool API. Returns True if active, True on any error (fail open)."""
+    from .config import P2POOL_API_URL
+    try:
+        url = f"{P2POOL_API_URL}/miner_stats"
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, params={"address": addr}) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return bool(data.get("active", False))
+    except Exception:
+        pass
+    return True  # fail open: don't block save when API is unreachable
 
 
 async def _show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edit: bool = False) -> int:
@@ -152,7 +171,12 @@ async def recv_address(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     addr = (update.message.text or "").strip()
     if not _ADDR_RE.match(addr):
         await update.message.reply_text(
-            "❌ That doesn't look like a valid BCH address. Please try again or /cancel."
+            "❌ <b>Invalid address format.</b>\n\n"
+            "Please enter a valid BCH address:\n"
+            "• cashaddr: <code>bitcoincash:qp3w…</code>\n"
+            "• legacy: <code>1A1zP…</code> or <code>3J98t…</code>\n\n"
+            "Or /cancel to go back.",
+            parse_mode="HTML",
         )
         return AWAIT_ADDR
 
@@ -169,12 +193,51 @@ async def recv_address(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
                 )
                 return AWAIT_ADDR
 
+    # Check whether the address is currently active on this node.
+    active = await _check_addr_active(addr)
+    if not active:
+        context.user_data["pending_addr"] = addr
+        await update.message.reply_text(
+            "⚠️ <b>Address not found on this node</b>\n\n"
+            f"<code>{addr}</code>\n\n"
+            "This address has no active hashrate on this p2pool node right now. "
+            "You can still save it — you'll get alerts as soon as it connects.",
+            parse_mode="HTML",
+            reply_markup=build_inactive_confirm(),
+        )
+        return CONFIRM_INACTIVE
+
     subscriptions.upsert(chat_id, {"addr": addr})
     await update.message.reply_text(
         f"✅ Address saved: <code>{addr}</code>",
         parse_mode="HTML",
     )
     return await _show_menu(update, context)
+
+
+# ------------------------------------------------------------------ #
+# CONFIRM_INACTIVE state                                             #
+# ------------------------------------------------------------------ #
+
+async def cb_save_anyway(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.callback_query.answer("Address saved!")
+    addr = context.user_data.pop("pending_addr", None)
+    if addr:
+        subscriptions.upsert(update.effective_chat.id, {"addr": addr})
+    return await _show_menu(update, context, edit=True)
+
+
+async def cb_change_addr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.callback_query.answer()
+    context.user_data.pop("pending_addr", None)
+    await update.callback_query.edit_message_text(
+        "📝 Please send your BCH mining address (cashaddr preferred).\n"
+        "Example: <code>bitcoincash:qp3w…</code>\n\n"
+        "Or /cancel to go back.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([]),
+    )
+    return AWAIT_ADDR
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -201,6 +264,11 @@ def build_conversation_handler() -> ConversationHandler:
             ],
             AWAIT_ADDR: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, recv_address),
+                CommandHandler("cancel", cmd_cancel),
+            ],
+            CONFIRM_INACTIVE: [
+                CallbackQueryHandler(cb_save_anyway, pattern="^save_addr_anyway$"),
+                CallbackQueryHandler(cb_change_addr, pattern="^change_addr$"),
                 CommandHandler("cancel", cmd_cancel),
             ],
         },

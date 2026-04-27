@@ -51,3 +51,12 @@ def build_unsub_confirm() -> InlineKeyboardMarkup:
             InlineKeyboardButton("↩ Cancel", callback_data="menu"),
         ]
     ])
+
+
+def build_inactive_confirm() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💾 Save anyway", callback_data="save_addr_anyway"),
+            InlineKeyboardButton("✏️ Different address", callback_data="change_addr"),
+        ]
+    ])
