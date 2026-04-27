@@ -99,7 +99,29 @@ async def _show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edit: b
 # Entry points                                                        #
 # ------------------------------------------------------------------ #
 
+_HELP_TEXT = (
+    "📖 <b>P2Pool BCH Notification Bot — quick guide</b>\n\n"
+    "<b>Setup</b>\n"
+    "1️⃣ Tap <b>📝 Set mining address</b> and send your BCH address.\n"
+    "   • Cashaddr: <code>bitcoincash:qp3w…</code>\n"
+    "   • Legacy: <code>1A1zP…</code> or <code>3J98t…</code>\n"
+    "   • If the address isn't mining yet you can still save it —\n"
+    "     alerts will start when it connects.\n\n"
+    "<b>Notifications</b>\n"
+    "Toggle each type with its button (green = on, grey = off):\n"
+    "  🟢 <b>Connect</b> — your miner came online\n"
+    "  🔴 <b>Disconnect</b> — your miner went offline\n"
+    "  📦 <b>Share</b> — a share was submitted by your miner\n"
+    "  🏆 <b>Block</b> — a block was found by the pool\n\n"
+    "<b>Commands</b>\n"
+    "  /start — show this guide + open the menu\n"
+    "  /cancel — cancel address input and return to the menu\n\n"
+    "All other interaction is via the inline keyboard below. ⬇️"
+)
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.effective_chat.send_message(_HELP_TEXT, parse_mode="HTML")
     return await _show_menu(update, context)
 
 
