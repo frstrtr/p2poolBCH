@@ -503,6 +503,15 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
 
             doa_rate = (total_doa / total_hr) if total_hr > 0 else 0
 
+            # Count accepted/rejected shares across all workers for this address
+            total_accepted = 0
+            total_rejected = 0
+            for wname, ws in wb.worker_shares.iteritems():
+                base = wname.split(',')[0].split('+')[0].split('/')[0].split('.')[0].split('_')[0]
+                if base == address:
+                    total_accepted += ws.get('accepted', 0)
+                    total_rejected += ws.get('rejected', 0)
+
             best_diff_all = wb.address_best_diff.get(address, 0)
             best_diff_round = wb.address_round_best_diff.get(address, 0)
             try:
@@ -520,8 +529,8 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                 doa_rate=doa_rate,
                 share_difficulty=share_diff,
                 current_payout=payout_sat / 1e8,
-                total_shares=0,
-                dead_shares=0,
+                total_shares=total_accepted + total_rejected,
+                dead_shares=total_rejected,
                 best_difficulty_all_time=best_diff_all,
                 best_difficulty_session=best_diff_all,
                 best_difficulty_round=best_diff_round,
