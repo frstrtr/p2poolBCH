@@ -316,12 +316,16 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
         try:
             miner_hash_rates, miner_dead_hash_rates = wb.get_local_rates()
             formatted_workers = {}
-            # Include workers with live connections that have submitted at least one share
+            # Include workers with live connections that submitted a share within the rate-monitor window
+            _rate_window = 10 * 60  # must match local_rate_monitor window
             for worker_name, info in wb.connected_workers.iteritems():
                 if worker_name not in miner_hash_rates:
                     last_diff = info.get('last_diff', 0)
                     if not last_diff:
-                        continue  # connected but never submitted here — mining elsewhere
+                        continue  # never submitted here
+                    last_share_time = info.get('last_share_time', 0)
+                    if time.time() - last_share_time > _rate_window:
+                        continue  # submitted before but quiet for >10 min — mining elsewhere
                     ws = wb.worker_shares.get(worker_name, {})
                     _hist0 = wb.worker_latency_history.get(worker_name, [])
                     _recent0 = [r for ts, r in _hist0]
