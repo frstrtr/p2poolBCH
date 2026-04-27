@@ -21,10 +21,12 @@ import asyncio
 import logging
 import signal
 
-from aiohttp import web
-from telegram.ext import Application
+import os
 
-from .config import BOT_TOKEN, LOCAL_EVENT_PORT
+from aiohttp import web
+from telegram.ext import Application, PicklePersistence
+
+from .config import BOT_TOKEN, LOCAL_EVENT_PORT, SUBSCRIPTIONS_FILE
 from .event_server import build_app
 from .handlers import build_conversation_handler
 
@@ -44,8 +46,14 @@ async def _run_aiohttp(app: web.Application, port: int) -> None:
 
 
 async def main() -> None:
+    # Persist conversation state across restarts (stored alongside subscriptions.json)
+    _persistence_path = os.path.join(
+        os.path.dirname(SUBSCRIPTIONS_FILE), "ptb_persistence"
+    )
+    persistence = PicklePersistence(filepath=_persistence_path)
+
     # Build PTB Application
-    ptb_app = Application.builder().token(BOT_TOKEN).build()
+    ptb_app = Application.builder().token(BOT_TOKEN).persistence(persistence).build()
     ptb_app.add_handler(build_conversation_handler())
 
     # Build aiohttp app (needs the bot object to send messages)

@@ -299,7 +299,6 @@ def build_conversation_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
             CommandHandler("start", cmd_start),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, cmd_start),
         ],
         states={
             IDLE: [
