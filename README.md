@@ -144,6 +144,36 @@ Smoke test:
 docker run --rm p2pool-bch pypy run_p2pool.py --help
 ```
 
+**Pre-built image from GitHub Container Registry (ghcr.io)**
+
+Every push to `master` and every `v*` release tag is automatically built and pushed to GHCR by the included GitHub Actions workflow (`.github/workflows/docker.yml`).  No local build required — just pull and run:
+
+```bash
+# latest master build
+docker pull ghcr.io/frstrtr/p2poolbch:latest
+
+docker run -d --restart unless-stopped \
+  -e RPC_HOST=192.168.86.110 \
+  -e RPC_USER=bitcoinrpc \
+  -e RPC_PASS=YOURPASS \
+  -e PAYOUT_ADDRESS=YOUR_BCH_ADDRESS \
+  -p 9348:9348 \
+  -p 9349:9349 \
+  --name p2pool-bch \
+  ghcr.io/frstrtr/p2poolbch:latest
+```
+
+Available tags:
+
+| Tag | Source |
+|-----|--------|
+| `latest` | latest `master` build |
+| `master` | same as `latest` |
+| `vX.Y.Z` | release tag (semver) |
+| `sha-<short>` | specific commit SHA |
+
+The workflow also runs a smoke test on every PR (build only, no push) to catch regressions before merge.
+
 **jtoomimnet vs mainnet**
 
 
