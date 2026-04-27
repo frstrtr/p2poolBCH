@@ -208,6 +208,34 @@ Smoke test:
 docker run --rm p2pool-bch pypy run_p2pool.py --help
 ```
 
+---
+
+**Miners dashboard (web UI)**
+
+The web UI is served on port **9348** alongside the stratum endpoint.  Open `http://<node-ip>:9348/` in a browser.  The **Miners** tab (`miners.html`) shows a live workers table refreshed every 30 s.
+
+*Workers table columns*
+
+| Column | Description |
+|--------|-------------|
+| Worker Name | Stratum login name (address+worker) |
+| Hashrate | Current effective hash rate (rate-monitor window, 10 min) |
+| Difficulty | Last share difficulty |
+| DOA Rate | Dead-on-arrival share rate (%) |
+| Latency | Exponential moving average of round-trip time measured by periodic `client.get_version` pings (every 5 min, first ping 1 s after auth) |
+| 24h Avg | 24-hour rolling average of all RTT samples |
+| Last Submit | Time since the most recent `mining.submit` from this worker; colour-coded green (<60 s), yellow (<1 h), red (≥1 h or never). Tooltip shows total session submit count and how many idle-reconnect nudges were sent. |
+
+*Ghost worker filtering* — Workers are hidden from the table when:
+- They have never submitted a share on this connection (`last_diff == 0`), or
+- Their last accepted share is older than 10 minutes and they are no longer TCP-connected.
+
+This prevents stale entries from miners that are pointed at a higher-priority backup pool.
+
+*Idle-miner reconnect nudge* — If a worker is TCP-connected but has not submitted a share for **15 minutes**, the pool automatically sends a `client.reconnect` Stratum notification.  The miner disconnects, reconnects, and re-evaluates its pool-priority list — priority 1 (this node) wins and shares resume.  If the firmware does not support `client.reconnect`, the TCP connection is dropped instead; the same reconnect cycle occurs.  A 15-minute cooldown prevents repeated nudges.  The nudge count is visible in the Last Submit column tooltip.
+
+---
+
 **Container networking modes**
 
 Networking is not baked into the image — it is chosen at runtime.  Pick whichever mode fits your setup:

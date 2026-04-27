@@ -10,7 +10,7 @@ notifications to subscribed miners when pool events occur.
 | Event | Description |
 |---|---|
 | 🟢 **Worker connected** | A miner authenticated via Stratum — shows worker name and IP |
-| 🔴 **Worker disconnected** | A miner's connection was closed — shows worker name |
+| 🔴 **Worker disconnected** | A miner's connection was closed — shows worker name. **Suppressed if the miner reconnects within 60 s** (transient TCP drops, pool software restarts). |
 | 📦 **Share found** | A valid share was submitted — shows worker name and share hash |
 | 🏆 **Block found** | A block was solved by the pool — shows worker name, reward amount, and a clickable link to the block explorer |
 
