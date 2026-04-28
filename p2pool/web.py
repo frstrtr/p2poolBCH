@@ -353,16 +353,21 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                         'merged_reverse_converted': False,
                     }
             for worker_name, hr in miner_hash_rates.iteritems():
-                if worker_name not in wb.connected_workers:
-                    continue  # disconnected; stale rate-monitor data
+                # Surface every worker that has rate-monitor work in the last
+                # 10 min, even if their TCP socket is momentarily between
+                # reconnects.  ASIC firmware (Antminer/Bitaxe/Braiins) flaps
+                # connections frequently; previously we required current TCP
+                # presence in connected_workers, which silently dropped active
+                # miners from the dashboard.
+                _info = wb.connected_workers.get(worker_name, {})
+                is_connected = worker_name in wb.connected_workers
                 doa = miner_dead_hash_rates.get(worker_name, 0)
-                last_diff = wb.connected_workers.get(worker_name, {}).get('last_diff', 0)
-                first_seen = wb.connected_workers.get(worker_name, {}).get('since', start_time)
+                last_diff = _info.get('last_diff', 0)
+                first_seen = _info.get('since', start_time)
                 ws = wb.worker_shares.get(worker_name, {})
                 _hist = wb.worker_latency_history.get(worker_name, [])
                 _recent = [r for ts, r in _hist]
                 _24h_avg = sum(_recent) / len(_recent) if _recent else None
-                _info = wb.connected_workers.get(worker_name, {})
                 formatted_workers[worker_name] = {
                     'hash_rate': hr,
                     'dead_hash_rate': doa,
@@ -371,8 +376,8 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                     'shares': ws.get('accepted', 0) + ws.get('rejected', 0),
                     'last_seen': time.time(),
                     'first_seen': first_seen,
-                    'connections': 1,
-                    'active_connections': 1,
+                    'connections': 1 if is_connected else 0,
+                    'active_connections': 1 if is_connected else 0,
                     'backup_connections': 0,
                     'connection_difficulties': [last_diff] if last_diff else [],
                     'latency': _info.get('latency', None),
