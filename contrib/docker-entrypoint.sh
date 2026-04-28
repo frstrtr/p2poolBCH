@@ -18,10 +18,16 @@
 #   P2POOL_EXTRA_ARGS    additional raw flags appended verbatim to the command
 #
 # Bot environment variables (all optional; bot starts if BOT_TOKEN or /etc/p2pool-bot.env exists):
-#   BOT_TOKEN            Telegram bot token (or put it in /etc/p2pool-bot.env)
-#   LOCAL_EVENT_PORT     port the bot event receiver listens on (default: 19349)
+#   BOT_TOKEN              Telegram bot token (or put it in /etc/p2pool-bot.env)
+#   LOCAL_EVENT_PORT       port the bot event receiver listens on (default: 19349)
+#   BOT_PROXY              outbound proxy URL for Telegram API
+#                          (http://, https://, socks5://, socks5h://)
+#   BOT_PROXY_GET_UPDATES  separate proxy for long-poll getUpdates
+#                          (defaults to BOT_PROXY)
 #
-# Mount /etc/p2pool-bot.env (chmod 600) with KEY=VALUE pairs to pass secrets.
+# Mount /etc/p2pool-bot.env (chmod 600) with KEY=VALUE pairs to pass secrets,
+# OR pass any of the above as docker -e VAR=value (they propagate to the bot
+# subprocess automatically; an env-file entry overrides a docker -e value).
 
 set -e
 

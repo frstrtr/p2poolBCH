@@ -342,6 +342,96 @@ When `BOT_PROXY_GET_UPDATES` is unset (the common case), the long-poll
 URL only when you have separate egress rules for outbound API calls
 versus long-poll traffic.
 
+### ⚠️ MTProto Telegram-app proxies are NOT compatible
+
+Proxy lists distributed inside Telegram apps (servers like
+`proxytg.live:443`, `bella-cook.com:443`, `pro.sosproxy.space:443`,
+etc.) speak Telegram's custom **MTProto** wire protocol, not standard
+HTTP CONNECT or SOCKS5. They only work with official Telegram client
+apps and **cannot** be used by `python-telegram-bot` (or any
+HTTP-based bot library).
+
+For bots you need a real HTTP/HTTPS/SOCKS5 proxy. Common ways to get
+one when only MTProto is on offer:
+
+- **Run a SOCKS5 server you control** on a reachable VPS (e.g.
+  Dante, 3proxy, or `ssh -D 1080 user@vps.example.net`).
+- **Translate MTProto → SOCKS5 locally** using
+  [`mtg`](https://github.com/9seconds/mtg) (`mtg simple-run`) or a
+  similar bridge — non-trivial to set up.
+- Use a **commercial SOCKS5 / HTTPS proxy** (NordVPN SOCKS, Mullvad
+  SOCKS, etc.).
+
+### Native Ubuntu 24.04 deploy — set the proxy
+
+Append the line to `/etc/p2pool-bot.env` (the bot subprocess reads it
+at startup) and restart the service:
+
+```bash
+echo 'BOT_PROXY=socks5h://USER:PASS@proxy.example.net:1080' \
+  | sudo tee -a /etc/p2pool-bot.env
+sudo systemctl restart p2pool-bch        # or p2pool.service for upstream unit
+sudo journalctl -u p2pool-bch -n 30 --no-pager | grep -i 'proxy\|telegram'
+# expect: Using outbound proxy for Telegram API: socks5h://USER:***@proxy.example.net:1080
+```
+
+If your venv was created **before** this update, refresh it once so
+SOCKS support is installed:
+
+```bash
+cd ~/Github/p2pool
+bot-venv/bin/pip install -r telegram_bot/requirements.txt
+sudo systemctl restart p2pool-bch
+```
+
+### Docker deploy — set the proxy
+
+The bot subprocess inherits the container's environment, so any of
+these mechanisms work — pick whichever fits your secrets workflow:
+
+**Option A — `docker run -e BOT_PROXY=...`** (env-var passthrough):
+```bash
+docker run --rm -d \
+  --name p2pool-bch \
+  -p 9348:9348 -p 9349:9349 \
+  -e RPC_HOST=192.168.86.110 \
+  -e RPC_USER=bitcoinrpc -e RPC_PASS=changeme \
+  -e BOT_TOKEN=123456:ABC-DEF-your-token \
+  -e BOT_PROXY=socks5h://USER:PASS@proxy.example.net:1080 \
+  ghcr.io/frstrtr/p2poolbch:latest
+```
+
+**Option B — mount `/etc/p2pool-bot.env`** (preferred for secrets):
+```bash
+sudo tee /etc/p2pool-bot.env >/dev/null <<'EOF'
+BOT_TOKEN=123456:ABC-DEF-your-token
+BOT_PROXY=socks5h://USER:PASS@proxy.example.net:1080
+EOF
+sudo chmod 600 /etc/p2pool-bot.env
+
+docker run --rm -d \
+  --name p2pool-bch \
+  -p 9348:9348 -p 9349:9349 \
+  -e RPC_HOST=192.168.86.110 \
+  -e RPC_USER=bitcoinrpc -e RPC_PASS=changeme \
+  -v /etc/p2pool-bot.env:/etc/p2pool-bot.env:ro \
+  ghcr.io/frstrtr/p2poolbch:latest
+```
+
+**Option C — `docker compose`**: uncomment the `BOT_PROXY` example in
+the `environment:` block of `docker-compose.yml`, or rely on the
+mounted `/etc/p2pool-bot.env`. Then:
+```bash
+docker compose up -d --pull always
+docker compose logs --tail=30 p2pool | grep -i proxy
+```
+
+After any change, verify the proxy is active:
+```bash
+docker logs p2pool-bch 2>&1 | grep "Using outbound proxy"
+# expect: Using outbound proxy for Telegram API: socks5h://USER:***@proxy.example.net:1080
+```
+
 ---
 
 ## Troubleshooting

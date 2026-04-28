@@ -76,11 +76,17 @@ async def main() -> None:
     # Build PTB Application
     builder = Application.builder().token(BOT_TOKEN).persistence(persistence)
     if BOT_PROXY:
-        # PTB v20.x: configure the proxy for both outbound API requests and
-        # the long-poll getUpdates connection.  Accepts http://, https://,
+        # Configure the proxy for both outbound API requests and the
+        # long-poll getUpdates connection.  Accepts http://, https://,
         # socks5:// and socks5h:// URLs (SOCKS requires the [socks] extra).
+        # PTB renamed .proxy_url() -> .proxy() in v20.5; keep both code
+        # paths so the bot works on the whole supported v20.x..v22.x range.
         logger.info("Using outbound proxy for Telegram API: %s", _redact_proxy(BOT_PROXY))
-        builder = builder.proxy_url(BOT_PROXY).get_updates_proxy_url(BOT_PROXY_GET_UPDATES or BOT_PROXY)
+        _gp = BOT_PROXY_GET_UPDATES or BOT_PROXY
+        if hasattr(builder, "proxy"):
+            builder = builder.proxy(BOT_PROXY).get_updates_proxy(_gp)
+        else:
+            builder = builder.proxy_url(BOT_PROXY).get_updates_proxy_url(_gp)
     ptb_app = builder.build()
     ptb_app.add_handler(build_conversation_handler())
 
