@@ -330,6 +330,7 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                     _hist0 = wb.worker_latency_history.get(worker_name, [])
                     _recent0 = [r for ts, r in _hist0]
                     _24h_avg0 = sum(_recent0) / len(_recent0) if _recent0 else None
+                    _conn_count = info.get('conn_count', 1)
                     formatted_workers[worker_name] = {
                         'hash_rate': 0,
                         'dead_hash_rate': 0,
@@ -338,8 +339,8 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                         'shares': ws.get('accepted', 0) + ws.get('rejected', 0),
                         'last_seen': info['since'],
                         'first_seen': info['since'],
-                        'connections': 1,
-                        'active_connections': 1,
+                        'connections': _conn_count,
+                        'active_connections': _conn_count,
                         'backup_connections': 0,
                         'connection_difficulties': [last_diff] if last_diff else [],
                         'latency': info.get('latency', None),
@@ -360,7 +361,7 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                 # presence in connected_workers, which silently dropped active
                 # miners from the dashboard.
                 _info = wb.connected_workers.get(worker_name, {})
-                is_connected = worker_name in wb.connected_workers
+                _conn_count = _info.get('conn_count', 0)
                 doa = miner_dead_hash_rates.get(worker_name, 0)
                 last_diff = _info.get('last_diff', 0)
                 first_seen = _info.get('since', start_time)
@@ -376,8 +377,8 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                     'shares': ws.get('accepted', 0) + ws.get('rejected', 0),
                     'last_seen': time.time(),
                     'first_seen': first_seen,
-                    'connections': 1 if is_connected else 0,
-                    'active_connections': 1 if is_connected else 0,
+                    'connections': _conn_count,
+                    'active_connections': _conn_count,
                     'backup_connections': 0,
                     'connection_difficulties': [last_diff] if last_diff else [],
                     'latency': _info.get('latency', None),
@@ -391,16 +392,19 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
                     'merged_reverse_converted': False,
                 }
 
-            # Build IP stats from connected_workers
+            # Build IP stats from connected_workers.  conn_count is the
+            # number of live TCP sockets per username, so attribute the same
+            # count to that worker's most-recent peer IP.
             ip_connections = {}
             ip_workers_map = {}
             for wname, info in wb.connected_workers.iteritems():
                 ip = info.get('ip', 'unknown')
-                ip_connections[ip] = ip_connections.get(ip, 0) + 1
+                ip_connections[ip] = ip_connections.get(ip, 0) + info.get('conn_count', 1)
                 if ip not in ip_workers_map:
                     ip_workers_map[ip] = set()
                 ip_workers_map[ip].add(wname)
             ip_workers = {ip: len(workers) for ip, workers in ip_workers_map.iteritems()}
+            total_sockets = sum(info.get('conn_count', 1) for info in wb.connected_workers.itervalues())
 
             # Submission rate: shares per second over last ~50 pseudoshares
             now = time.time()
@@ -416,7 +420,7 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
 
             return {
                 'pool': {
-                    'connections': len(wb.connected_workers),
+                    'connections': total_sockets,
                     'workers': len(formatted_workers),
                     'total_workers': len(formatted_workers),
                     'total_hash_rate': sum(miner_hash_rates.itervalues()),

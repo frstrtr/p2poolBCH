@@ -3,11 +3,22 @@ aiohttp server that receives POST /event from p2pool (PyPy2 side) and routes
 alerts to subscribed Telegram users.
 
 Event payload (JSON body):
-    {"type": "worker_connected"|"worker_disconnected"|"share_found"|"block_found",
-     "node": str, "username": str, "address": str, "ip": str (connect/disconnect),
+    {"type": "worker_connected"|"worker_disconnected"|
+              "worker_silent"|"worker_active_again"|
+              "worker_flapping"|"worker_stable"|
+              "share_found"|"block_found",
+     "node": str, "username": str, "address": str,
+     "ip": str (connect/disconnect),
+     "idle_seconds": float (worker_silent),
+     "flap_count": int, "window_seconds": int (worker_flapping),
      "hash": str (share/block), "dead": bool (share),
      "reward_sat": int (block), "symbol": str (block),
      "explorer_url": str (block, full URL or empty), "ts": float}
+
+Subscription flag mapping: silent / flapping / stable / active_again ride on
+the existing 'connect' and 'disconnect' user-facing flags so existing
+subscribers receive them without re-opting in.  bad-news goes to disconnect,
+good-news goes to connect.
 """
 from __future__ import annotations
 
@@ -64,6 +75,17 @@ def _worker_line(worker: str) -> str:
     return ""
 
 
+def _format_idle(seconds: float) -> str:
+    s = max(0.0, float(seconds or 0))
+    if s < 60:
+        return f"{int(s)}s"
+    if s < 3600:
+        return f"{int(s/60)}m"
+    if s < 86400:
+        return f"{int(s/3600)}h {int((s%3600)/60)}m"
+    return f"{int(s/86400)}d {int((s%86400)/3600)}h"
+
+
 def _build_message(event: dict) -> tuple[str, str]:
     """Return (flag_name, message_text)."""
     t = event.get("type", "")
@@ -86,6 +108,39 @@ def _build_message(event: dict) -> tuple[str, str]:
         ip = event.get("ip", "?")
         return "disconnect", (
             f"🔴 <b>Worker disconnected</b>\n"
+            f"Node: {node}"
+            f"{_worker_line(worker)}\n"
+            f"Address: {addr_html}"
+        )
+    elif t == "worker_silent":
+        idle = event.get("idle_seconds", 0)
+        return "disconnect", (
+            f"🟡 <b>Worker silent (no shares)</b>\n"
+            f"Node: {node}"
+            f"{_worker_line(worker)}\n"
+            f"Address: {addr_html}\n"
+            f"Idle: <b>{_format_idle(idle)}</b>"
+        )
+    elif t == "worker_active_again":
+        return "connect", (
+            f"✅ <b>Worker active again</b>\n"
+            f"Node: {node}"
+            f"{_worker_line(worker)}\n"
+            f"Address: {addr_html}"
+        )
+    elif t == "worker_flapping":
+        count = event.get("flap_count", 0)
+        win = int(event.get("window_seconds", 3600) // 60)
+        return "disconnect", (
+            f"⚠️ <b>Worker flapping</b>\n"
+            f"Node: {node}"
+            f"{_worker_line(worker)}\n"
+            f"Address: {addr_html}\n"
+            f"Flaps: <b>{count}</b> in last {win}m"
+        )
+    elif t == "worker_stable":
+        return "connect", (
+            f"✅ <b>Worker stable</b>\n"
             f"Node: {node}"
             f"{_worker_line(worker)}\n"
             f"Address: {addr_html}"

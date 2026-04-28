@@ -39,22 +39,56 @@ class WorkerBridge(worker_interface.WorkerBridge):
         self.running = True
         self.pseudoshare_received = variable.Event()
         self.share_received = variable.Event()
+        # Per-socket events fired by stratum.connectionMade / connectionLost.
+        # Multiple sockets may share a username (multi-conn ASIC firmware), so
+        # these events fire once per TCP socket — not once per logical worker.
         self.worker_connected = variable.Event()    # args: (username, address, peer_ip)
         self.worker_disconnected = variable.Event() # args: (username, address, peer_ip)
-        self.connected_workers = {}  # username -> {'address': addr, 'ip': ip, 'since': timestamp}
+        # Semantic worker-state events.  These deduplicate the per-socket events
+        # via refcount: first_connected fires only when the worker has zero
+        # active sockets and a new one arrives; last_disconnected fires only
+        # when the final socket closes.  External notifiers (telegram, etc.)
+        # MUST subscribe to these instead of the raw events.
+        self.worker_first_connected = variable.Event()    # args: (username, address, peer_ip)
+        self.worker_last_disconnected = variable.Event()  # args: (username, address, peer_ip)
+        # Silence detection: connected workers that haven't submitted any
+        # mining.submit in SILENT_THRESHOLD seconds — TCP alive but not mining.
+        self.worker_silent = variable.Event()       # args: (username, address, idle_seconds)
+        self.worker_active_again = variable.Event() # args: (username, address)
+        self.connected_workers = {}  # username -> {'address': addr, 'ip': ip, 'since': timestamp, 'conn_count': int, ...}
         self.worker_shares = {}        # username -> {'accepted': n, 'rejected': n}
         self.total_shares = {'accepted': 0, 'rejected': 0}
         self.worker_latency_history = {}  # username -> [(timestamp, rtt_s), ...]  24h rolling
+        self._silent_workers = set()  # usernames currently flagged silent
 
         @self.worker_connected.watch
         def _(username, address, peer_ip):
-            self.connected_workers[username] = {'address': address, 'ip': peer_ip, 'since': time.time()}
+            info = self.connected_workers.get(username)
+            if info is None:
+                # First socket for this username — create the entry.
+                info = {'address': address, 'ip': peer_ip, 'since': time.time(), 'conn_count': 0}
+                self.connected_workers[username] = info
+                is_first = True
+            else:
+                is_first = False
+            info['conn_count'] = info.get('conn_count', 0) + 1
+            info['ip'] = peer_ip  # most-recent connection's peer IP
             if username not in self.worker_shares:
                 self.worker_shares[username] = {'accepted': 0, 'rejected': 0}
+            if is_first:
+                self.worker_first_connected.happened(username, address, peer_ip)
 
         @self.worker_disconnected.watch
         def _(username, address, peer_ip):
-            self.connected_workers.pop(username, None)
+            info = self.connected_workers.get(username)
+            if info is None:
+                return  # spurious / already gone
+            info['conn_count'] = max(0, info.get('conn_count', 1) - 1)
+            if info['conn_count'] == 0:
+                # Last socket closed — drop the worker entirely.
+                self.connected_workers.pop(username, None)
+                self._silent_workers.discard(username)
+                self.worker_last_disconnected.happened(username, address, peer_ip)
         self.share_found = variable.Event()         # args: (username, address, share_hash_hex, dead)
         self.block_found = variable.Event()         # args: (username, address, block_hash_hex)
         self.address_best_diff = {}       # address → best pow difficulty (session)
@@ -76,6 +110,28 @@ class WorkerBridge(worker_interface.WorkerBridge):
 
         self.address_throttle = 0
         self.share_rate = share_rate
+
+        # Silence detection: a connected worker that hasn't sent mining.submit
+        # for SILENT_THRESHOLD seconds is treated as silent (TCP up but not
+        # actually mining here).  Set well below the 15-min idle reconnect
+        # nudge in stratum.py so users hear about a broken miner before the
+        # nudge cycle kicks in.
+        SILENT_THRESHOLD = 10 * 60
+        SILENT_CHECK_INTERVAL = 60
+        def _check_silent_workers():
+            now = time.time()
+            for username, info in list(self.connected_workers.iteritems()):
+                last_submit = info.get('last_submit_time') or info.get('since', now)
+                idle = now - last_submit
+                if idle >= SILENT_THRESHOLD:
+                    if username not in self._silent_workers:
+                        self._silent_workers.add(username)
+                        self.worker_silent.happened(username, info.get('address'), idle)
+                else:
+                    if username in self._silent_workers:
+                        self._silent_workers.discard(username)
+                        self.worker_active_again.happened(username, info.get('address'))
+        deferral.RobustLoopingCall(_check_silent_workers).start(SILENT_CHECK_INTERVAL)
         
         self.tracker_view = forest.TrackerView(self.node.tracker, forest.get_attributedelta_type(dict(forest.AttributeDelta.attrs,
             my_count=lambda share: 1 if share.hash in self.my_share_hashes else 0,
