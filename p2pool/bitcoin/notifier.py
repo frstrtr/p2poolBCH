@@ -5,7 +5,10 @@ no new PyPy2 imports are needed.
 
 Wire format (POST body, JSON):
     {"type": "worker_connected",    "node": "vm301", "username": "rig1.w1",
-     "address": "bitcoincash:qp...", "ip": "192.168.1.5",  "ts": 1714000000.0}
+     "address": "bitcoincash:qp...", "ip": "192.168.1.5",
+     "latency_ms": 12.3,    # optional, omitted if first ping hasn't
+                            # landed within _CONNECT_NOTIFY_GRACE seconds
+     "ts": 1714000000.0}
     {"type": "worker_disconnected", ...same fields...}
     {"type": "worker_silent",       "username": ..., "address": ...,
      "idle_seconds": 720, "ts": ...}
@@ -31,6 +34,14 @@ from twisted.web.client import getPage
 # flap is recorded instead.
 _DISCONNECT_GRACE = 60  # seconds
 
+# How long the worker_connected alert is held back so the first latency
+# ping (scheduled by stratum.py 1 s after connect) has time to land in
+# wb.connected_workers[username]['latency'] before we read it.  2 s is
+# enough margin for the typical 50–500 ms RTT plus the 1 s ping delay,
+# while staying below the 60 s flap window so the disconnect-cancel
+# semantics are unaffected.
+_CONNECT_NOTIFY_GRACE = 2  # seconds
+
 # Flap detection: a flap = full disconnect followed by full reconnect within
 # the grace window.  When _FLAP_THRESHOLD flaps occur within _FLAP_WINDOW we
 # raise a single 'worker_flapping' alert; once the rolling count drops back
@@ -42,12 +53,19 @@ _FLAP_PRUNE_INTERVAL = 60       # seconds between sweep / clear checks
 
 
 class LocalEventPusher(object):
-    def __init__(self, bot_url, node_name):
+    def __init__(self, bot_url, node_name, wb=None):
         # bot_url: e.g. "http://127.0.0.1:9349"
+        # wb: optional WorkerBridge so the connect-grace timer can read
+        #     wb.connected_workers[username]['latency'] at fire time and
+        #     include it in the worker_connected payload.  None disables
+        #     the latency lookup gracefully.
         self._url = str(bot_url).rstrip('/') + '/event'
         self._node = node_name
+        self._wb = wb
         # username -> (DelayedCall, payload) for pending disconnect alerts
         self._pending_disconnect = {}
+        # username -> DelayedCall for pending connect alerts (latency-grace)
+        self._pending_connect = {}
         # username -> {'addr': str, 'times': [float, ...]} rolling flap log
         self._flap_history = {}
         # usernames currently in 'flapping' state (we have raised an alert)
@@ -121,10 +139,40 @@ class LocalEventPusher(object):
         # and we don't want to spam them with the alternating cycle.
         if username in self._flapping:
             return
-        self._push({'type': 'worker_connected', 'username': username,
-                    'address': address, 'ip': ip})
+        # Defer the push so the first latency ping can complete; at fire
+        # time we read the resulting RTT from wb.connected_workers and
+        # attach it to the payload as latency_ms.  on_worker_disconnected
+        # cancels this if the worker drops before the timer fires, so we
+        # never send "Worker connected" after an actual disconnect.
+        prior = self._pending_connect.pop(username, None)
+        if prior is not None and prior.active():
+            prior.cancel()  # superseded by a newer connect (rare)
+        payload = {'type': 'worker_connected', 'username': username,
+                   'address': address, 'ip': ip}
+        def _fire():
+            self._pending_connect.pop(username, None)
+            if self._wb is not None:
+                info = self._wb.connected_workers.get(username) or {}
+                lat = info.get('latency')
+                if isinstance(lat, (int, float)) and lat > 0:
+                    payload['latency_ms'] = round(lat * 1000.0, 1)
+            self._push(payload)
+        dc = reactor.callLater(_CONNECT_NOTIFY_GRACE, _fire)
+        self._pending_connect[username] = dc
 
     def on_worker_disconnected(self, username, address, ip):
+        # If a connect-grace timer is still pending for this username, the
+        # worker connected and immediately disconnected before we even sent
+        # the connect alert.  Drop both: cancelling the deferred connect
+        # avoids a misleading "Worker connected" arriving AFTER the actual
+        # disconnect, and we record the cycle as a flap so the flap-rate
+        # alarm still picks it up.
+        prior_connect = self._pending_connect.pop(username, None)
+        if prior_connect is not None and prior_connect.active():
+            prior_connect.cancel()
+            self._record_flap(username, address)
+            return
+
         # Don't send immediately — wait for grace period.  When the timer
         # fires we record the disconnect as a flap event (regardless of
         # whether reconnect ever follows) so the rolling flap-rate alarm

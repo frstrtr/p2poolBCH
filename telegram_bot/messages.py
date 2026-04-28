@@ -14,6 +14,7 @@ import re
 
 
 def fmt_addr(addr: str | None) -> str:
+    """Render a BCH address as truncated <code>...</code>, or <unknown>."""
     if not addr:
         return "<unknown>"
     return f"<code>{addr[:14]}…{addr[-6:]}</code>"
@@ -47,6 +48,7 @@ def worker_line(worker: str) -> str:
 
 
 def format_idle(seconds: float) -> str:
+    """Render a seconds value as a compact human duration (s / m / h+m / d+h)."""
     s = max(0.0, float(seconds or 0))
     if s < 60:
         return f"{int(s)}s"
@@ -57,6 +59,9 @@ def format_idle(seconds: float) -> str:
     return f"{int(s/86400)}d {int((s%86400)/3600)}h"
 
 
+# 8 event types -> 8 branches, each with locals for the type's own fields.
+# A dispatch table is more invasive than the readability gain warrants here.
+# pylint: disable=too-many-locals,too-many-return-statements,too-many-branches
 def build_message(event: dict) -> tuple[str, str]:
     """Map a p2pool /event payload to (flag_name, html_message_text).
 
@@ -76,21 +81,30 @@ def build_message(event: dict) -> tuple[str, str]:
 
     if t == "worker_connected":
         ip = event.get("ip", "?")
+        latency_ms = event.get("latency_ms")
+        latency_str = ""
+        if isinstance(latency_ms, (int, float)) and latency_ms > 0:
+            # The notifier defers the alert by ~2 s so the first stratum
+            # ping has time to land; if a value is present, render it on
+            # its own line.  Absent value means the ping hadn't completed
+            # yet (or the miner doesn't respond to client.get_version).
+            latency_str = f"\nLatency: <b>{latency_ms:.1f} ms</b>"
         return "connect", (
             f"🟢 <b>Worker connected</b>\n"
             f"Node: {node}"
             f"{worker_line(worker)}\n"
             f"Address: {addr_html}\n"
             f"IP: <code>{ip}</code>"
+            f"{latency_str}"
         )
-    elif t == "worker_disconnected":
+    if t == "worker_disconnected":
         return "disconnect", (
             f"🔴 <b>Worker disconnected</b>\n"
             f"Node: {node}"
             f"{worker_line(worker)}\n"
             f"Address: {addr_html}"
         )
-    elif t == "worker_silent":
+    if t == "worker_silent":
         idle = event.get("idle_seconds", 0)
         return "disconnect", (
             f"🟡 <b>Worker silent (no shares)</b>\n"
@@ -99,14 +113,14 @@ def build_message(event: dict) -> tuple[str, str]:
             f"Address: {addr_html}\n"
             f"Idle: <b>{format_idle(idle)}</b>"
         )
-    elif t == "worker_active_again":
+    if t == "worker_active_again":
         return "connect", (
             f"✅ <b>Worker active again</b>\n"
             f"Node: {node}"
             f"{worker_line(worker)}\n"
             f"Address: {addr_html}"
         )
-    elif t == "worker_flapping":
+    if t == "worker_flapping":
         count = event.get("flap_count", 0)
         win = int(event.get("window_seconds", 3600) // 60)
         return "disconnect", (
@@ -116,14 +130,14 @@ def build_message(event: dict) -> tuple[str, str]:
             f"Address: {addr_html}\n"
             f"Flaps: <b>{count}</b> in last {win}m"
         )
-    elif t == "worker_stable":
+    if t == "worker_stable":
         return "connect", (
             f"✅ <b>Worker stable</b>\n"
             f"Node: {node}"
             f"{worker_line(worker)}\n"
             f"Address: {addr_html}"
         )
-    elif t == "share_found":
+    if t == "share_found":
         dead = event.get("dead", False)
         h = event.get("hash") or "?"
         status = "💀 DEAD" if dead else "✅ accepted"
@@ -134,7 +148,7 @@ def build_message(event: dict) -> tuple[str, str]:
             f"Address: {addr_html}\n"
             f"Hash: <code>{h[:16]}…</code>"
         )
-    elif t == "block_found":
+    if t == "block_found":
         h = event.get("hash") or "?"
         reward_sat = event.get("reward_sat") or 0
         symbol = event.get("symbol") or "BCH"

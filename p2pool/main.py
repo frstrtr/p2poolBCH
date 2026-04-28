@@ -342,7 +342,7 @@ def main(args, net, datadir_path, merged_urls, worker_endpoint):
         if args.local_bot_url:
             import socket as _socket
             _node_name = args.node_name or _socket.gethostname()
-            _pusher = notifier.LocalEventPusher(args.local_bot_url, _node_name)
+            _pusher = notifier.LocalEventPusher(args.local_bot_url, _node_name, wb)
             # Subscribe to the SEMANTIC events (refcounted), not the per-socket
             # raw ones — multi-socket ASIC firmware fires the raw events many
             # times per logical worker and would otherwise spam alerts.
