@@ -1,0 +1,6 @@
+telethon>=1.34
+aiohttp>=3.9
+filelock>=3.12
+# pysocks is required for SOCKS5/HTTP proxy support; Telethon's MTProxy
+# transport is built-in and needs no extra package.
+pysocks>=1.7

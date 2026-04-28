@@ -60,6 +60,42 @@ p2pool (PyPy2, Twisted)
 
 ---
 
+## Choosing a bot implementation
+
+Two interchangeable bot variants ship in the repo. Both produce identical
+alert wording and share the same subscription store, so switching between
+them at any time preserves your subscribers.
+
+| Variant | Library | Transport | Proxy types | Extra credentials |
+|---|---|---|---|---|
+| **`ptb`** (default) | `python-telegram-bot` | Bot API over HTTPS to `api.telegram.org` | http / https / socks5 / socks5h via `BOT_PROXY` | none — bot token only |
+| **`mtproto`** | `Telethon` | MTProto direct to Telegram datacenters | http / https / socks5 / socks5h via `BOT_PROXY` **AND** MTProto Telegram-app proxies via `MTPROXY_HOST/PORT/SECRET` | `MTPROTO_API_ID` + `MTPROTO_API_HASH` from [my.telegram.org/apps](https://my.telegram.org/apps) |
+
+**Pick `ptb` when** your network can reach `api.telegram.org:443` over plain
+HTTPS. Smallest dependency footprint, simplest setup.
+
+**Pick `mtproto` when** plain HTTPS to `api.telegram.org` is blocked but
+your network can reach a Telegram MTProto endpoint or one of the MTProto
+Telegram-app proxies (`proxytg.live`, `bella-cook.com`,
+`pro.sosproxy.space`, etc.). The Bot API variant **cannot** use those —
+only this one can.
+
+Switching:
+- **Native** install: set `BOT_IMPL=ptb` or `BOT_IMPL=mtproto` in
+  `/etc/p2pool-bot.env`, or pass `--bot-impl mtproto` to p2pool.
+- **Docker**: pass `-e BOT_IMPL=mtproto` (the entrypoint forwards it).
+
+The bot subprocess prints which impl it loaded:
+```
+Telegram bot started [PTB / Bot API] (PID 12345)
+Telegram bot started [MTProto (Telethon)] (PID 12345)
+```
+
+**Only one impl can run at a time** — they share `LOCAL_EVENT_PORT` and
+the subscription file lock.
+
+---
+
 ## Quick setup (with the installer)
 
 The installer `contrib/install_ubuntu_24.04_py2_pypy.sh` handles everything
@@ -342,24 +378,67 @@ When `BOT_PROXY_GET_UPDATES` is unset (the common case), the long-poll
 URL only when you have separate egress rules for outbound API calls
 versus long-poll traffic.
 
-### ⚠️ MTProto Telegram-app proxies are NOT compatible
+### ⚠️ MTProto Telegram-app proxies and the PTB variant
 
 Proxy lists distributed inside Telegram apps (servers like
 `proxytg.live:443`, `bella-cook.com:443`, `pro.sosproxy.space:443`,
 `flint…proxytg.ink:…`, `freeon.name:8443`, etc.) speak Telegram's
 custom **MTProto** wire protocol, not standard HTTP CONNECT or SOCKS5.
-They terminate MTProto on one side and forward MTProto to a Telegram
-**datacenter** on the other.
 
-The bot, on the other hand, talks to **`api.telegram.org` over plain
-HTTPS** (Bot API). That's a completely different protocol — there is
-no protocol-level translator that turns MTProto into HTTPS. **Even
-running `mtg` or any other "MTProto bridge" locally will not help**:
-those tools only relay MTProto, never HTTPS.
+- The **`ptb` (default) variant** talks Bot API over plain HTTPS to
+  `api.telegram.org`, which is a different protocol. **MTProto proxies
+  do not work with `ptb`** — there is no HTTPS↔MTProto translator
+  (`mtg` and similar tools are MTProto servers, not bridges). Don't
+  copy one into `BOT_PROXY` for the PTB variant — the bot will fail
+  to reach `api.telegram.org` and PTB will log connection errors.
+- The **`mtproto` variant** speaks MTProto natively and **can use these
+  proxies directly** via `MTPROXY_HOST/PORT/SECRET`. See the dedicated
+  walkthrough below.
 
-So MTProto proxies are usable **only inside Telegram apps**. Don't
-copy one into `BOT_PROXY` and expect it to work — the bot will fail
-to reach `api.telegram.org` and PTB will log connection errors.
+If you must use the `ptb` variant, you need a real HTTP CONNECT,
+HTTPS, or SOCKS5 endpoint (covered in the next section).
+
+### Using an MTProto Telegram-app proxy (mtproto variant)
+
+When `BOT_IMPL=mtproto` and `MTPROXY_HOST` is set, Telethon connects
+to Telegram's datacenters via the MTProto proxy you specify, exactly
+the way the official Telegram apps do.
+
+To extract the three values from your Telegram app:
+
+1. In Telegram → **Settings → Data and Storage → Proxy**, tap the entry.
+2. Note the server, port, and the long hex secret. (Tap **Share** for a
+   `tg://proxy?server=…&port=…&secret=…` URL with the same fields.)
+3. Copy them into your env file:
+
+```ini
+BOT_IMPL=mtproto
+MTPROTO_API_ID=1234567
+MTPROTO_API_HASH=0123456789abcdef0123456789abcdef
+MTPROXY_HOST=bella-cook.com
+MTPROXY_PORT=443
+MTPROXY_SECRET=ee1100000000000000000000000000000061706976302e7465616d2e7472616e73706f7274
+```
+
+The secret can be in any of the forms Telegram apps emit:
+
+- 32-hex (16 bytes) — classic random secret.
+- 33-hex starting with `dd` — random secret, padding-resistant.
+- Longer hex starting with `ee` — faketls + cloaked TLS host.
+
+All three are passed verbatim; Telethon negotiates the right transport.
+
+When MTProxy is active, the startup log reads:
+
+```
+Telethon proxy: mtproxy://bella-cook.com:443 secret=ee110000…
+```
+
+Only the first 8 characters of the secret are kept; the rest is masked.
+
+If `MTPROXY_HOST` is unset but `BOT_PROXY` is set, the mtproto variant
+falls back to SOCKS5/HTTP via `BOT_PROXY` exactly like the PTB variant.
+Direct connection if neither is set.
 
 ### What kind of proxy DOES work
 
@@ -528,6 +607,50 @@ docker logs p2pool-bch 2>&1 | grep "Using outbound proxy"
 
 > **Tip:** pin to a SHA tag (`ghcr.io/frstrtr/p2poolbch:sha-ec8c6af`)
 > for reproducible deploys instead of always-floating `latest`.
+
+### Worked example — Docker + MTProto Telegram-app proxy
+
+This is the path for a host that **cannot** reach `api.telegram.org`
+directly but **can** reach an MTProto proxy listed in the official
+Telegram apps (the screenshot scenario).  Substitute the four
+`<PLACEHOLDERS>` with your own values; the proxy fields come straight
+from the Telegram app's proxy entry.
+
+```bash
+docker stop p2pool-bch 2>/dev/null; docker rm p2pool-bch 2>/dev/null
+
+docker pull ghcr.io/frstrtr/p2poolbch:latest
+
+docker run -d --restart unless-stopped \
+  --network host \
+  --name p2pool-bch \
+  -e RPC_HOST=127.0.0.1 \
+  -e RPC_USER=<your_rpcuser> \
+  -e RPC_PASS=<your_rpcpassword> \
+  -e PAYOUT_ADDRESS=<your_BCH_address> \
+  -e BOT_TOKEN=<token_from_BotFather> \
+  -e BOT_IMPL=mtproto \
+  -e MTPROTO_API_ID=<numeric_api_id_from_my.telegram.org> \
+  -e MTPROTO_API_HASH=<hex_api_hash_from_my.telegram.org> \
+  -e MTPROXY_HOST=bella-cook.com \
+  -e MTPROXY_PORT=443 \
+  -e MTPROXY_SECRET=ee1100000000000000000000000000000061706976302e7465616d2e7472616e73706f7274 \
+  -e P2POOL_EXTRA_ARGS="--give-author 0" \
+  -v p2pool-data:/p2pool/data \
+  ghcr.io/frstrtr/p2poolbch:latest
+
+# Verify the mtproto impl was picked AND the proxy is in effect
+docker logs p2pool-bch 2>&1 | grep -E 'Telegram bot started|Telethon proxy'
+# expected:
+#   Telegram bot started [MTProto (Telethon)] (PID 12345)
+#   Telethon proxy: mtproxy://bella-cook.com:443 secret=ee110000…
+```
+
+The same pattern applies for any of the screenshot proxies; the
+secret is the long hex string Telegram apps display when you tap the
+proxy entry. If `MTPROXY_HOST` is unset and only `BOT_PROXY` is set,
+the mtproto variant uses your SOCKS5/HTTP proxy instead, falling back
+to direct connection if neither is set.
 
 ---
 

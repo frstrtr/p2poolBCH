@@ -365,13 +365,27 @@ def main(args, net, datadir_path, merged_urls, worker_endpoint):
                                 _bot_env[_k.strip()] = _v.strip()
                 except Exception as _e:
                     print 'Warning: could not read bot env file %s: %s' % (args.bot_env_file, _e)
+            # Choose the bot impl: --bot-impl on the CLI wins; otherwise the
+            # BOT_IMPL env var (so docker -e BOT_IMPL=mtproto works); default
+            # is the Bot-API/PTB variant.
+            _bot_impl = (args.bot_impl or _bot_env.get('BOT_IMPL', 'ptb') or 'ptb').strip().lower()
+            if _bot_impl in ('ptb', 'bot-api', 'bot_api', ''):
+                _bot_module = 'telegram_bot.bot'
+                _bot_label = 'PTB / Bot API'
+            elif _bot_impl in ('mtproto', 'tdlib', 'telethon'):
+                _bot_module = 'telegram_bot_mtproto.bot'
+                _bot_label = 'MTProto (Telethon)'
+            else:
+                print 'Warning: unknown --bot-impl %r — defaulting to PTB' % (_bot_impl,)
+                _bot_module = 'telegram_bot.bot'
+                _bot_label = 'PTB / Bot API'
             _p2pool_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             _bot_proc = subprocess.Popen(
-                [args.bot_python, '-m', 'telegram_bot.bot'],
+                [args.bot_python, '-m', _bot_module],
                 cwd=_p2pool_root,
                 env=_bot_env,
             )
-            print 'Telegram bot started (PID %d)' % (_bot_proc.pid,)
+            print 'Telegram bot started [%s] (PID %d)' % (_bot_label, _bot_proc.pid)
             def _stop_bot():
                 if _bot_proc.poll() is None:
                     print 'Stopping Telegram bot (PID %d)...' % (_bot_proc.pid,)
@@ -694,7 +708,14 @@ def run():
     bot_group.add_argument('--bot-python', metavar='PYTHON',
         help='Python 3 executable (or venv python) to use for the bot subprocess (default: python3)',
         type=str, action='store', default='python3', dest='bot_python')
-    
+    bot_group.add_argument('--bot-impl', metavar='IMPL',
+        help='which bot implementation to launch: "ptb" (default — Bot API '
+             'over HTTPS via python-telegram-bot, supports HTTP/SOCKS5 '
+             'proxies) or "mtproto" (Telethon over native MTProto, '
+             'additionally supports MTProto Telegram-app proxies). The '
+             'BOT_IMPL env var is honoured if this flag is omitted.',
+        type=str, action='store', default=None, dest='bot_impl')
+
     args = parser.parse_args()
     
     if args.debug:

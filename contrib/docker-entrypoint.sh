@@ -19,10 +19,20 @@
 #
 # Bot environment variables (all optional; bot starts if BOT_TOKEN or /etc/p2pool-bot.env exists):
 #   BOT_TOKEN              Telegram bot token (or put it in /etc/p2pool-bot.env)
+#   BOT_IMPL               "ptb" (default — Bot API / HTTPS) or "mtproto"
+#                          (Telethon — MTProto direct, supports MTProxy
+#                          Telegram-app proxies)
+#   MTPROTO_API_ID         (mtproto only) numeric API ID from my.telegram.org/apps
+#   MTPROTO_API_HASH       (mtproto only) hex API hash from my.telegram.org/apps
+#   MTPROXY_HOST           (mtproto only) MTProto proxy hostname (e.g. bella-cook.com)
+#   MTPROXY_PORT           (mtproto only) MTProto proxy port (default 443)
+#   MTPROXY_SECRET         (mtproto only) MTProxy secret hex (as shown in Telegram apps)
 #   LOCAL_EVENT_PORT       port the bot event receiver listens on (default: 19349)
 #   BOT_PROXY              outbound proxy URL for Telegram API
-#                          (http://, https://, socks5://, socks5h://)
-#   BOT_PROXY_GET_UPDATES  separate proxy for long-poll getUpdates
+#                          (http://, https://, socks5://, socks5h://) — works
+#                          for both impls; for mtproto it's only used when
+#                          MTPROXY_HOST is unset.
+#   BOT_PROXY_GET_UPDATES  (ptb only) separate proxy for long-poll getUpdates
 #                          (defaults to BOT_PROXY)
 #
 # Mount /etc/p2pool-bot.env (chmod 600) with KEY=VALUE pairs to pass secrets,
@@ -77,6 +87,12 @@ if [ "${_start_bot}" = "1" ]; then
     ARGS="${ARGS} --run-bot --bot-python /opt/bot-venv/bin/python3"
     if [ -f /etc/p2pool-bot.env ]; then
         ARGS="${ARGS} --bot-env-file /etc/p2pool-bot.env"
+    fi
+    # BOT_IMPL=ptb | mtproto — propagated from docker -e or the env file
+    # (main.py itself also reads BOT_IMPL if --bot-impl is omitted, but
+    # passing it on the CLI makes the choice visible in `ps`).
+    if [ -n "${BOT_IMPL:-}" ]; then
+        ARGS="${ARGS} --bot-impl ${BOT_IMPL}"
     fi
 fi
 

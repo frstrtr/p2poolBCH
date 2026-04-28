@@ -66,9 +66,14 @@ RUN /opt/pypy2/bin/pypy -m pip install --upgrade "pip<21" "setuptools<45" wheel 
         argparse
 
 # ── Python 3 bot venv ───────────────────────────────────────────────────────
-COPY telegram_bot/requirements.txt /tmp/bot-req.txt
+# Install dependencies for BOTH bot impls (PTB / Bot-API and Telethon /
+# MTProto) so the image works regardless of BOT_IMPL at runtime.  Combined
+# pip footprint is ~25 MB; the choice is just deploy-time switching.
+COPY telegram_bot/requirements.txt          /tmp/bot-req-ptb.txt
+COPY telegram_bot_mtproto/requirements.txt  /tmp/bot-req-mtproto.txt
 RUN python3 -m venv /opt/bot-venv \
- && /opt/bot-venv/bin/pip install --no-cache-dir -r /tmp/bot-req.txt
+ && /opt/bot-venv/bin/pip install --no-cache-dir -r /tmp/bot-req-ptb.txt \
+ && /opt/bot-venv/bin/pip install --no-cache-dir -r /tmp/bot-req-mtproto.txt
 
 ##############################################################################
 # Stage 2 — runtime image (lean)
