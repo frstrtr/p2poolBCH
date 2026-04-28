@@ -123,24 +123,34 @@ class VarStrType(Type):
         file.write(item)
 
 class EnumType(Type):
-    def __init__(self, inner, pack_to_unpack):
+    def __init__(self, inner, pack_to_unpack, tolerant=False):
+        # When tolerant=True, unknown numeric codes are passed through as
+        # the raw integer instead of raising — useful for forward-compatible
+        # protocols (e.g. Bitcoin inv types where new MSG_* values may be
+        # introduced by peers that the parser doesn't yet know about).
         self.inner = inner
         self.pack_to_unpack = pack_to_unpack
-        
+        self.tolerant = tolerant
+
         self.unpack_to_pack = {}
         for k, v in pack_to_unpack.iteritems():
             if v in self.unpack_to_pack:
                 raise ValueError('duplicate value in pack_to_unpack')
             self.unpack_to_pack[v] = k
-    
+
     def read(self, file):
         data = self.inner.read(file)
         if data not in self.pack_to_unpack:
+            if self.tolerant:
+                return data  # raw int — caller's else-branch handles it
             raise ValueError('enum data (%r) not in pack_to_unpack (%r)' % (data, self.pack_to_unpack))
         return self.pack_to_unpack[data]
-    
+
     def write(self, file, item):
         if item not in self.unpack_to_pack:
+            if self.tolerant and isinstance(item, (int, long)):
+                self.inner.write(file, item)
+                return
             raise ValueError('enum item (%r) not in unpack_to_pack (%r)' % (item, self.unpack_to_pack))
         self.inner.write(file, self.unpack_to_pack[item])
 

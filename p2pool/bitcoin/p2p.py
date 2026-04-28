@@ -62,12 +62,19 @@ class Protocol(p2protocol.Protocol):
         self.pinger = deferral.RobustLoopingCall(self.send_ping, nonce=1234)
         self.pinger.start(30)
     
+    # tolerant=True: bitcoind / BCH peers may send inv items with newer
+    # MSG_* type codes (e.g. compact-block, witness, double-spend-proof,
+    # Avalanche proof) that this parser doesn't recognise.  Letting the
+    # raw integer pass through keeps the rest of the inv message valid
+    # and lets handle_inv log+skip the unknown items rather than dying
+    # on the entire packet.
     message_inv = pack.ComposedType([
         ('invs', pack.ListType(pack.ComposedType([
-            ('type', pack.EnumType(pack.IntType(32), {1: 'tx', 2: 'block'})),
+            ('type', pack.EnumType(pack.IntType(32), {1: 'tx', 2: 'block'}, tolerant=True)),
             ('hash', pack.IntType(256)),
         ]))),
     ])
+    _logged_unknown_inv_types = set()
     def handle_inv(self, invs):
         for inv in invs:
             if inv['type'] == 'tx':
@@ -75,11 +82,16 @@ class Protocol(p2protocol.Protocol):
             elif inv['type'] == 'block':
                 self.factory.new_block.happened(inv['hash'])
             else:
-                print 'Unknown inv type', inv
-    
+                # Log each new unknown type code once so we know peers
+                # are advertising new inv categories without flooding
+                # the journal on every inv message.
+                if inv['type'] not in self._logged_unknown_inv_types:
+                    self._logged_unknown_inv_types.add(inv['type'])
+                    print 'Unknown inv type %r — ignoring (will not log again for this code)' % (inv['type'],)
+
     message_getdata = pack.ComposedType([
         ('requests', pack.ListType(pack.ComposedType([
-            ('type', pack.EnumType(pack.IntType(32), {1: 'tx', 2: 'block'})),
+            ('type', pack.EnumType(pack.IntType(32), {1: 'tx', 2: 'block'}, tolerant=True)),
             ('hash', pack.IntType(256)),
         ]))),
     ])
