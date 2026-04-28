@@ -144,6 +144,8 @@ pypy run_p2pool.py --net bitcoincash \
 | `SUBSCRIPTIONS_FILE` | `telegram_bot/subscriptions.json` | no | Path to subscription store |
 | `BROADCAST_CHANNEL_ID` | (empty) | no | Channel ID for broadcast alerts; bot must be admin |
 | `ONE_SUB_PER_ADDRESS` | `false` | no | When `true`, each BCH address may only be claimed by one subscriber |
+| `BOT_PROXY` | (empty) | no | Outbound proxy URL for the Telegram API. Use `http://`, `https://`, `socks5://` or `socks5h://`; embed credentials inline (`scheme://user:pass@host:port`) when required. Leave empty for direct connection. |
+| `BOT_PROXY_GET_UPDATES` | inherits `BOT_PROXY` | no | Separate proxy for the long-poll `getUpdates` connection. Most setups can leave this unset. |
 
 ---
 
@@ -305,6 +307,40 @@ By default multiple Telegram subscribers may register the same BCH address
 (useful for team monitoring). Set `ONE_SUB_PER_ADDRESS=true` to enforce one
 subscriber per address — a second user trying to claim an already-taken
 address is rejected with an error message in the bot.
+
+---
+
+## Outbound proxy (when api.telegram.org is unreachable)
+
+In some regions or hosting providers, direct egress to
+`api.telegram.org` is blocked or unstable. Set `BOT_PROXY` (and
+optionally `BOT_PROXY_GET_UPDATES`) in `/etc/p2pool-bot.env` to route
+the bot's HTTPS API traffic through a proxy. URL schemes accepted:
+
+| Scheme | Notes |
+|---|---|
+| `http://host:port` | HTTP CONNECT proxy. |
+| `https://host:port` | HTTPS proxy with TLS to the proxy itself. |
+| `socks5://host:port` | SOCKS5 with hostname resolved by the bot. |
+| `socks5h://host:port` | SOCKS5 with hostname resolved by the proxy (preferred when DNS to `api.telegram.org` is also blocked). |
+
+Inline credentials are supported: `scheme://user:pass@host:port`. The
+bot logs the proxy URL at startup with the password redacted.
+
+SOCKS support is provided by the `[socks]` extra of
+`python-telegram-bot`, already pinned in `requirements.txt` — install
+or reinstall the venv after pulling this update so the SOCKS
+dependency is present:
+
+```bash
+bot-venv/bin/pip install -r telegram_bot/requirements.txt
+sudo systemctl restart p2pool.service   # or p2pool-bch.service
+```
+
+When `BOT_PROXY_GET_UPDATES` is unset (the common case), the long-poll
+`getUpdates` connection inherits `BOT_PROXY`. Set it to a different
+URL only when you have separate egress rules for outbound API calls
+versus long-poll traffic.
 
 ---
 

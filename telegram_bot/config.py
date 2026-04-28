@@ -6,6 +6,20 @@ import os
 
 BOT_TOKEN: str = os.environ["BOT_TOKEN"]
 
+# Optional outbound proxy for Telegram API access.  Useful when the bot
+# host can't reach api.telegram.org directly (regional blocks, hostile
+# networks, restricted egress).  Examples:
+#   http://proxy.example.net:3128
+#   https://user:pass@proxy.example.net:443
+#   socks5://user:pass@127.0.0.1:1080         (SOCKS support requires
+#   socks5h://user:pass@127.0.0.1:1080         python-telegram-bot[socks])
+# When unset the bot connects directly.
+BOT_PROXY: str = os.environ.get("BOT_PROXY", "").strip()
+# Separate proxy for the long-poll getUpdates connection (defaults to
+# BOT_PROXY).  Some setups use a different upstream for outbound vs
+# long-poll — most users can leave this empty.
+BOT_PROXY_GET_UPDATES: str = os.environ.get("BOT_PROXY_GET_UPDATES", BOT_PROXY).strip()
+
 # Port that aiohttp listens on for p2pool event POSTs
 LOCAL_EVENT_PORT: int = int(os.environ.get("LOCAL_EVENT_PORT", "19349"))
 

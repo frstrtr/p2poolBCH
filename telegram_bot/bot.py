@@ -26,7 +26,13 @@ import os
 from aiohttp import web
 from telegram.ext import Application, PicklePersistence
 
-from .config import BOT_TOKEN, LOCAL_EVENT_PORT, SUBSCRIPTIONS_FILE
+from .config import (
+    BOT_TOKEN,
+    BOT_PROXY,
+    BOT_PROXY_GET_UPDATES,
+    LOCAL_EVENT_PORT,
+    SUBSCRIPTIONS_FILE,
+)
 from .event_server import build_app
 from .handlers import build_conversation_handler
 
@@ -35,6 +41,21 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+
+def _redact_proxy(url: str) -> str:
+    """Return a proxy URL with the userinfo password redacted, safe to log."""
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+        s = urlsplit(url)
+        if s.password:
+            netloc = (s.username or "") + ":***@" + (s.hostname or "")
+            if s.port:
+                netloc += ":" + str(s.port)
+            return urlunsplit((s.scheme, netloc, s.path, s.query, s.fragment))
+    except Exception:
+        pass
+    return url
 
 
 async def _run_aiohttp(app: web.Application, port: int) -> None:
@@ -53,7 +74,14 @@ async def main() -> None:
     persistence = PicklePersistence(filepath=_persistence_path)
 
     # Build PTB Application
-    ptb_app = Application.builder().token(BOT_TOKEN).persistence(persistence).build()
+    builder = Application.builder().token(BOT_TOKEN).persistence(persistence)
+    if BOT_PROXY:
+        # PTB v20.x: configure the proxy for both outbound API requests and
+        # the long-poll getUpdates connection.  Accepts http://, https://,
+        # socks5:// and socks5h:// URLs (SOCKS requires the [socks] extra).
+        logger.info("Using outbound proxy for Telegram API: %s", _redact_proxy(BOT_PROXY))
+        builder = builder.proxy_url(BOT_PROXY).get_updates_proxy_url(BOT_PROXY_GET_UPDATES or BOT_PROXY)
+    ptb_app = builder.build()
     ptb_app.add_handler(build_conversation_handler())
 
     # Build aiohttp app (needs the bot object to send messages)
