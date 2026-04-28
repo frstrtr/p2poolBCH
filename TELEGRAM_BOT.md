@@ -608,6 +608,12 @@ docker logs p2pool-bch 2>&1 | grep "Using outbound proxy"
 > **Tip:** pin to a SHA tag (`ghcr.io/frstrtr/p2poolbch:sha-ec8c6af`)
 > for reproducible deploys instead of always-floating `latest`.
 
+> **Wrapper script available**:
+> `contrib/p2pool-docker-restart.sh` does the stop / rm / pull / run
+> cycle for you with all env vars passed through.  Edit the SETTINGS
+> block at the top of the script (or override any variable from the
+> calling environment) to keep secrets out of shell history.
+
 ### Worked example — Docker + MTProto Telegram-app proxy
 
 This is the path for a host that **cannot** reach `api.telegram.org`

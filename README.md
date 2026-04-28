@@ -57,7 +57,12 @@ using the pre-built GHCR image — no compilation required.
 - A **Telegram bot token** — message [@BotFather](https://t.me/BotFather), send `/newbot`,
   follow the prompts, and copy the token it gives you (`123456:ABC-DEF...`).
 
-**Steps**
+**Steps — local BCHN (single-host)**
+
+This is the simplest case: BCHN runs on the same machine as the
+container. `--network host` lets the container reach BCHN at
+`127.0.0.1:8332` with no port mapping or NAT and exposes
+stratum+web (9348) and p2pool P2P (9349) directly on the host.
 
 1. Pull the image:
    ```bash
@@ -68,23 +73,26 @@ using the pre-built GHCR image — no compilation required.
    ```bash
    docker run -d --restart unless-stopped \
      --network host \
-     -e RPC_HOST=<BCHN_IP> \
+     --name p2pool-bch \
+     -e RPC_HOST=127.0.0.1 \
      -e RPC_USER=<rpcuser> \
      -e RPC_PASS=<rpcpassword> \
      -e PAYOUT_ADDRESS=<your_BCH_address> \
      -e BOT_TOKEN=<token_from_BotFather> \
-     --name p2pool-bch \
+     -e P2POOL_EXTRA_ARGS="--give-author 0" \
+     -v p2pool-data:/p2pool/data \
      ghcr.io/frstrtr/p2poolbch:latest
    ```
-   > Use `--network host` when p2pool and BCHN run on the same machine or LAN.  
-   > For bridge networking add `-p 9348:9348 -p 9349:9349` instead.
+   > For bridge networking with BCHN on a remote host, replace
+   > `--network host` with `-p 9348:9348 -p 9349:9349` and set
+   > `RPC_HOST` to the BCHN machine's IP.
 
 3. Verify it started:
    ```bash
    docker logs -f p2pool-bch
    ```
    You should see `...success!` for both the RPC and P2P BCHN connections,
-   followed by `Telegram bot started`.
+   followed by `Telegram bot started [PTB / Bot API]`.
 
 4. Open Telegram, find your bot by the username you gave BotFather, and send `/start`.
    - Tap **📝 Set mining address** and enter your BCH address.
@@ -93,7 +101,50 @@ using the pre-built GHCR image — no compilation required.
 
 5. *(Optional)* Forward port **9349** on your router to the host for better P2P peer connectivity.
 
-See `TELEGRAM_BOT.md` for the full bot reference (broadcast channels, env-var list, troubleshooting). If your host can't reach `api.telegram.org` directly, the same doc covers `BOT_PROXY` setup with a list of compatible proxy types and known VPN providers.
+**Restart cycle (pull latest + recreate container)**
+
+The same recipe with stop/rm prepended is the canonical way to upgrade
+to the latest image.  Re-uses the named volume `p2pool-data` so the
+share-chain survives the restart (otherwise reload takes ~5–15 min):
+
+```bash
+docker stop p2pool-bch 2>/dev/null; docker rm p2pool-bch 2>/dev/null
+
+docker pull ghcr.io/frstrtr/p2poolbch:latest
+
+docker run -d --restart unless-stopped \
+  --network host \
+  --name p2pool-bch \
+  -e RPC_HOST=127.0.0.1 \
+  -e RPC_USER=<rpcuser> \
+  -e RPC_PASS=<rpcpassword> \
+  -e PAYOUT_ADDRESS=<your_BCH_address> \
+  -e BOT_TOKEN=<token_from_BotFather> \
+  -e P2POOL_EXTRA_ARGS="--give-author 0" \
+  -v p2pool-data:/p2pool/data \
+  ghcr.io/frstrtr/p2poolbch:latest
+
+docker logs --tail=30 p2pool-bch
+```
+
+**Restart with MTProto Telegram-app proxy** — when the host can't
+reach `api.telegram.org` directly but can reach a Telegram MTProto
+proxy.  Append the four `BOT_IMPL`/`MTPROTO_*`/`MTPROXY_*` lines to
+the `docker run` above; everything else is identical:
+
+```bash
+  -e BOT_IMPL=mtproto \
+  -e MTPROTO_API_ID=<numeric_id_from_my.telegram.org/apps> \
+  -e MTPROTO_API_HASH=<hex_hash_from_my.telegram.org/apps> \
+  -e MTPROXY_HOST=<your_mtproxy_host> \
+  -e MTPROXY_PORT=443 \
+  -e MTPROXY_SECRET=<long_hex_secret_from_telegram_app> \
+```
+
+See `TELEGRAM_BOT.md` for the full bot reference (broadcast channels,
+env-var list, proxy types, VPN providers, troubleshooting), and
+`telegram_bot_mtproto/` for the MTProto-native variant that supports
+MTProto Telegram-app proxies.
 
 ---
 
