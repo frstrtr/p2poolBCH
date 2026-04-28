@@ -1,49 +1,37 @@
-# docker-compose.yml — P2Pool BCH with bridged-LAN (macvlan) networking
+# docker-compose.yml — P2Pool BCH
 #
-# BRIDGED LAN SETUP (macvlan)
+# DEFAULT TOPOLOGY: host networking + local BCHN (`RPC_HOST=127.0.0.1`)
 # ─────────────────────────────────────────────────────────────────────────────
-# The p2pool container receives its own MAC address and LAN IP so miners and
-# peers reach it directly — no port-forwarding or NAT required.
+# This is the simplest and most common setup: BCHN runs on the same host as
+# the p2pool container and the container shares the host's network stack.
+#
+#   • Stratum (9348) and p2pool P2P (9349) listen directly on the host's
+#     interfaces — no -p port mapping, no NAT, no DOCKER-USER iptables rules.
+#   • The container reaches BCHN at 127.0.0.1:8332 because they share the
+#     host's lo interface.
+#   • Miners point at <host_IP>:9348.  If the host has a public IP, just
+#     forward UDP/TCP 9349 on the upstream router for inbound P2P peers.
 #
 # BEFORE STARTING:
-#   1. Find your host's LAN interface:    ip -br link
-#   2. Update 'parent' below to match    (e.g. eth0, enp3s0, ens18)
-#   3. Update subnet/gateway/ip_range    to match your LAN
-#   4. Set a static IPv4 for the container inside ip_range
-#   5. Create /etc/p2pool-bot.env        (see telegram_bot/.env.example)
-#      chmod 600 /etc/p2pool-bot.env
+#   1. Make sure BCHN is running with rpc bound to localhost.
+#   2. Edit RPC_USER, RPC_PASS, PAYOUT_ADDRESS in the environment block.
+#   3. (Optional) Create /etc/p2pool-bot.env (chmod 600) for Telegram alerts:
+#        BOT_TOKEN=123456:ABC-DEF-your-token
+#        # BOT_PROXY=socks5h://user:pass@host:1080   # if api.telegram.org is blocked
+#      See TELEGRAM_BOT.md for the proxy types and provider list.
 #
-# NOTE: by default the Docker host CANNOT reach a macvlan container on the
-#       same physical interface. To talk to the container from the host,
-#       create a macvlan shim:
-#         ip link add macvlan-shim link eth0 type macvlan mode bridge
-#         ip addr add 192.168.86.241/32 dev macvlan-shim
-#         ip link set macvlan-shim up
-#         ip route add 192.168.86.240/32 dev macvlan-shim
-#
-# ALTERNATIVE — host networking (simpler, no isolation):
-#   Comment out the 'networks' section and 'networks:' key in p2pool service,
-#   then add:  network_mode: host
+# ALTERNATIVES (uncomment in the service block below):
+#   • Bridged with explicit -p mapping — when BCHN runs on a different
+#     machine and you want network isolation between p2pool and host.
+#   • Macvlan bridged-LAN — gives the container its own MAC + LAN IP so it
+#     looks like a physical mining rig on the LAN.  Keeps the original
+#     macvlan recipe in comments at the bottom of this file.
 
 version: "3.9"
 
-# ─── Macvlan bridged-LAN network ────────────────────────────────────────────
-networks:
-  bch-lan:
-    driver: macvlan
-    driver_opts:
-      parent: eth0            # ← change to your host LAN interface
-    ipam:
-      config:
-        - subnet: 192.168.86.0/24
-          gateway: 192.168.86.1
-          ip_range: 192.168.86.240/29   # containers may use .240–.246
-
-# ─── Volumes ────────────────────────────────────────────────────────────────
 volumes:
   p2pool-data:
 
-# ─── Services ───────────────────────────────────────────────────────────────
 services:
   p2pool:
     image: ghcr.io/frstrtr/p2poolbch:latest
@@ -51,43 +39,38 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    container_name: p2pool-bch
 
-    networks:
-      bch-lan:
-        ipv4_address: 192.168.86.240    # ← static LAN IP for this node
+    # ── Default: host networking + local BCHN ──────────────────────────────
+    network_mode: host
 
-    # Ports are accessible directly via macvlan IP — no mapping needed.
-    # Uncomment if using bridge/host networking instead of macvlan:
-    # ports:
-    #   - "9348:9348"   # Stratum + Web UI
-    #   - "9349:9349"   # p2pool P2P
-
-    # ── Required ────────────────────────────────────────────────────────────
+    # ── Required (always) ──────────────────────────────────────────────────
     environment:
-      RPC_HOST: "192.168.86.110"        # ← your BCHN node's IP
+      RPC_HOST: "127.0.0.1"             # BCHN on the same host
       RPC_USER: "bitcoinrpc"
-      RPC_PASS: "changeme"              # ← use secrets in production
+      RPC_PASS: "changeme"              # use secrets in production
+      PAYOUT_ADDRESS: "dynamic"         # or your bitcoincash:q… address
 
-    # ── Optional ────────────────────────────────────────────────────────────
+    # ── Optional environment ───────────────────────────────────────────────
     #   NETWORK:            bitcoincash
-    #   PAYOUT_ADDRESS:     dynamic
     #   NODE_NAME:          my-p2pool
-    #   P2POOL_EXTRA_ARGS:  --fee 1
+    #   P2POOL_EXTRA_ARGS:  --give-author 0    # zero upstream donations
     #
-    # ── Telegram bot — direct env vars (alternative to /etc/p2pool-bot.env) ─
-    # Any of BOT_TOKEN, BOT_PROXY, BOT_PROXY_GET_UPDATES,
-    # BROADCAST_CHANNEL_ID, etc. can be set here and they will reach the bot
-    # subprocess.  Use BOT_PROXY to route Telegram API calls via an
-    # http/https/socks5 proxy when api.telegram.org is unreachable from the
-    # container's egress.  Note: MTProto Telegram-app proxies are NOT
-    # compatible — bot needs a real http/https/socks5 endpoint.  Examples:
-    #   BOT_PROXY:          "http://proxy.host:3128"
-    #   BOT_PROXY:          "socks5h://user:pass@127.0.0.1:1080"
+    # Telegram bot — direct env vars (alternative to /etc/p2pool-bot.env).
+    # Any of BOT_TOKEN, BOT_PROXY, BOT_PROXY_GET_UPDATES, BROADCAST_CHANNEL_ID
+    # set here propagate to the bot subprocess.  Use BOT_PROXY to route
+    # Telegram API calls via an http/https/socks5 proxy when
+    # api.telegram.org is unreachable.  MTProto Telegram-app proxies (e.g.
+    # proxytg.live, bella-cook.com) are NOT compatible — see TELEGRAM_BOT.md.
+    #   BOT_TOKEN:                "123456:ABC-DEF-your-token"
+    #   BOT_PROXY:                "socks5h://user:pass@127.0.0.1:1080"
+    #   BOT_PROXY_GET_UPDATES:    "socks5h://user:pass@127.0.0.1:1080"
 
-    # ── Telegram bot ────────────────────────────────────────────────────────
-    # Mount the env file; the entrypoint auto-detects it and starts the bot.
     volumes:
+      # Mount env file (chmod 600); entrypoint auto-detects and starts the bot.
       - /etc/p2pool-bot.env:/etc/p2pool-bot.env:ro
+      # Persist share-chain across container recreation (skip the long
+      # 'Loading shares' phase on every restart).
       - p2pool-data:/p2pool/data
 
     # Resource limits (tune to your hardware)
@@ -96,3 +79,47 @@ services:
         limits:
           cpus: "2"
           memory: "1g"
+
+# =============================================================================
+# ALTERNATIVE TOPOLOGIES — copy into the service block above to switch
+# =============================================================================
+#
+# ── Bridged with explicit port mapping (BCHN on a different host) ────────────
+#
+#     # Replace the 'network_mode: host' line above with:
+#     ports:
+#       - "9348:9348"   # Stratum + Web UI
+#       - "9349:9349"   # p2pool P2P
+#     # And update RPC_HOST to the BCHN machine's IP:
+#     environment:
+#       RPC_HOST: "192.168.86.110"
+#       RPC_USER: "bitcoinrpc"
+#       RPC_PASS: "changeme"
+#       PAYOUT_ADDRESS: "dynamic"
+#
+# ── Macvlan bridged-LAN (container has its own MAC + LAN IP) ─────────────────
+#
+# The p2pool container receives its own MAC address and LAN IP so miners and
+# peers reach it directly — no port-forwarding or NAT required.  Default
+# Docker hosts CANNOT reach a macvlan container on the same physical
+# interface; create a macvlan shim if you need host-to-container access:
+#     ip link add macvlan-shim link eth0 type macvlan mode bridge
+#     ip addr add 192.168.86.241/32 dev macvlan-shim
+#     ip link set macvlan-shim up
+#     ip route add 192.168.86.240/32 dev macvlan-shim
+#
+#     # 1. Add the network at top level:
+#     networks:
+#       bch-lan:
+#         driver: macvlan
+#         driver_opts:
+#           parent: eth0                    # change to your LAN interface
+#         ipam:
+#           config:
+#             - subnet: 192.168.86.0/24
+#               gateway: 192.168.86.1
+#               ip_range: 192.168.86.240/29
+#     # 2. Replace 'network_mode: host' in the service block with:
+#     networks:
+#       bch-lan:
+#         ipv4_address: 192.168.86.240      # static LAN IP for this node
