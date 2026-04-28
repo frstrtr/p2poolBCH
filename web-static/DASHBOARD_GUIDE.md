@@ -153,6 +153,23 @@ Miners currently connected to *this* node's stratum. Rows are grouped by payout 
 
 Enable **Show historical** to include miners who have disconnected but submitted shares recently.
 
+### How "currently connected" is determined
+
+A miner appears as currently connected if **either**:
+
+1. They have at least one live TCP socket on the stratum port (tracked
+   per-username via a connection refcount — multi-socket ASIC firmware
+   contributes multiple sockets to the same worker), **or**
+2. They have submitted a share within the rate-monitor window (10 min) —
+   even if their TCP socket is momentarily between reconnects.
+
+This makes the dashboard tolerant of ASIC firmware that flaps TCP
+connections frequently: a miner that reconnects every few seconds will
+still show consistent hashrate without flickering in and out of the
+table. The per-worker `connections` value in `/stratum_stats` is the
+true socket count (so a Bitmain D-series with 4 parallel sockets shows
+`4`, not `1`); pool-level `connections` sums those across all workers.
+
 ---
 
 ## 💵 Current Payouts Table

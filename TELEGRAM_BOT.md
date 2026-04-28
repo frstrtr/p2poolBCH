@@ -7,15 +7,24 @@ notifications to subscribed miners when pool events occur.
 
 ## Event types
 
-| Event | Description |
-|---|---|
-| 🟢 **Worker connected** | A miner authenticated via Stratum — shows worker name and IP |
-| 🔴 **Worker disconnected** | A miner's connection was closed — shows worker name. **Suppressed if the miner reconnects within 60 s** (transient TCP drops, pool software restarts). |
-| 📦 **Share found** | A valid share was submitted — shows worker name and share hash |
-| 🏆 **Block found** | A block was solved by the pool — shows worker name, reward amount, and a clickable link to the block explorer |
+| Event | Subscription flag | Description |
+|---|---|---|
+| 🟢 **Worker connected** | `connect` | Fires when a miner authenticates via Stratum — shows worker name and IP. Multi-socket ASIC firmware (Bitmain D-series, etc.) opens several parallel TCP sockets per worker; the alert fires **once** when the first socket connects, not per-socket. Subsequent simultaneous sockets are silently absorbed by the connection refcount. |
+| 🔴 **Worker disconnected** | `disconnect` | Fires only when the **last** TCP socket for that worker closes — partial drops with surviving sockets do not trigger. **Suppressed if the worker reconnects within 60 s** (transient TCP drops, pool software restarts) and recorded as a flap instead. |
+| 🟡 **Worker silent (no shares)** | `disconnect` | Fires when a worker's TCP is alive but no `mining.submit` has arrived for ≥10 minutes — i.e. the miner is connected but not actually mining (firmware hung, hashrate dead, fan stalled, ASIC chip failure, etc.). Includes the idle duration. |
+| ✅ **Worker active again** | `connect` | Fires when a previously-silent worker resumes submitting shares. |
+| ⚠️ **Worker flapping** | `disconnect` | Fires once when a worker has had **≥5 disconnect/reconnect cycles within 1 hour**. While in flapping state the bot suppresses the noisy individual connect/disconnect alerts so you only get this one summary instead of dozens. |
+| ✅ **Worker stable** | `connect` | Fires when a flapping worker calms down (≤1 cycle in the last hour). Individual connect/disconnect alerts resume. |
+| 📦 **Share found** | `share` | A valid share was submitted — shows worker name and share hash. |
+| 🏆 **Block found** | `block` | A block was solved by the pool — shows worker name, reward amount, and a clickable link to the block explorer. |
 
 Alerts are matched by **BCH address** — each user registers their address
 and receives only events for that address.
+
+The four user-facing toggles in the bot menu are `connect`, `disconnect`,
+`share`, and `block`. All seven worker-state event types ride on the
+`connect` (good news) or `disconnect` (bad news) flag, so existing
+subscribers receive the new alert types automatically — no opt-in needed.
 
 ---
 
@@ -23,9 +32,25 @@ and receives only events for that address.
 
 ```
 p2pool (PyPy2, Twisted)
-  └─ LocalEventPusher  →  POST /event  →  aiohttp server (bot)
-                                                └─ match subscribers by address
-                                                └─ send Telegram messages via PTB
+  ├─ stratum.py        per-socket connectionMade / connectionLost
+  │   └─ wb.worker_connected / wb.worker_disconnected   (RAW events, per TCP socket)
+  │
+  ├─ work.py           refcounted state per username
+  │   ├─ wb.connected_workers[username]['conn_count']++/--
+  │   ├─ wb.worker_first_connected   (fires only when count 0→1)
+  │   ├─ wb.worker_last_disconnected (fires only when count 1→0)
+  │   ├─ silence loop: 60 s LoopingCall checks last_submit_time
+  │   ├─ wb.worker_silent       (≥10 min since last mining.submit)
+  │   └─ wb.worker_active_again (silent worker resumes submitting)
+  │
+  ├─ notifier.py       LocalEventPusher
+  │   ├─ subscribes to the SEMANTIC events above (not raw)
+  │   ├─ 60 s grace timer debounces fast flaps
+  │   └─ rolling 1 h flap-rate counter → worker_flapping / worker_stable
+  │
+  └─ POST /event  →  aiohttp server (bot, Python 3)
+                          └─ match subscribers by address
+                          └─ send Telegram messages via PTB
 ```
 
 - The bot runs as a **child process of p2pool** when `--run-bot` is used.
@@ -221,6 +246,43 @@ If a miner runs several rigs all authenticating with the same BCH address
 (`addr.rig1`, `addr.rig2`, …), the subscriber for that address receives
 alerts for all of them. The **Worker** line identifies which rig triggered
 each alert.
+
+### Multi-socket ASIC firmware
+Some firmware (Bitmain D-series, Braiins OS, certain S21 builds) opens
+2–4 parallel TCP sockets per worker for redundancy and faster job
+switching. The bot tracks a per-username **connection refcount**:
+
+- The first socket to connect fires **Worker connected**; the 2nd…Nth
+  simultaneous sockets are silently absorbed.
+- The 1st…(N–1)th sockets to drop are silently absorbed; only the **last
+  socket closing** fires **Worker disconnected**.
+
+So a 4-socket worker that loses one socket and reconnects produces no
+alerts at all — the worker never actually stopped mining.
+
+### Silent-but-connected detection
+A worker whose TCP is alive but stopped submitting shares (firmware hung,
+hashrate dead, network to the upstream RPC node down) is invisible at the
+TCP layer. p2pool runs a 60-second background loop that flags any
+connected worker idle ≥10 min as **silent** and emits a `worker_silent`
+alert. The flag clears (and a `worker_active_again` alert fires) as soon
+as a `mining.submit` arrives again — so a hung-then-recovered worker
+produces a silent → active-again pair regardless of whether the TCP
+socket ever dropped.
+
+The 10-minute threshold is chosen below the 15-minute `client.reconnect`
+nudge in stratum so users hear about a broken miner before the nudge
+cycle kicks in.
+
+### Flap detection
+Every full disconnect/reconnect cycle (whether sub-grace and debounce-
+canceled, or full disconnect followed by a fresh reconnect) is recorded
+in a **rolling 1-hour flap counter** per username. When a worker hits
+**≥5 flaps in 1 h** the bot fires a single **Worker flapping** alert and
+suppresses the individual connect/disconnect alerts for that worker —
+otherwise an unstable miner could spam dozens of alerts per hour. Once
+the rolling count drops back to **<2 flaps in the window**, a **Worker
+stable** alert fires and individual alerts resume.
 
 ### Address format must match
 The bot matches events to subscribers by the **BCH payout address** exactly
