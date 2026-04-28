@@ -33,6 +33,10 @@ class StratumRPCMiningProvider(object):
         self._ping_active = False
         self._ping_call = None
         self._last_reconnect_at = 0  # timestamp of last client.reconnect sent
+        # Throttle the "deferred work send" warning during long startup
+        # phases (peers connecting / sharechain download / bitcoind down)
+        # so we log at most once per _DEFERRED_WORK_LOG_INTERVAL.
+        self._deferred_work_logged_at = 0
 
     
     def rpc_subscribe(self, miner_version=None, session_id=None, *args):
@@ -197,13 +201,31 @@ class StratumRPCMiningProvider(object):
         if 'subscribe-extranonce' in extensions:
             print 'Extension method subscribe-extranonce not implemented'
 
+    _DEFERRED_WORK_LOG_INTERVAL = 30  # seconds between repeated startup-state log lines
+
     def _send_work(self):
         try:
             x, got_response = self.wb.get_work(*self.wb.preprocess_request('' if self.username is None else self.username))
+        except jsonrpc.Error as e:
+            # Expected JSONRPC errors raised by get_work() during startup
+            # or transient outages: peers not yet connected, sharechain
+            # still downloading, lost contact with bitcoind, unknown
+            # softfork.  These are NOT bugs — keep the miner's stratum
+            # connection alive; new_work_event will retry _send_work as
+            # soon as the node recovers.  Log at most once per 30 s to
+            # avoid flooding the journal during long startups.
+            now = time.time()
+            if now - self._deferred_work_logged_at >= self._DEFERRED_WORK_LOG_INTERVAL:
+                self._deferred_work_logged_at = now
+                log.msg('Stratum %s: deferring work send (%s); retry on next new_work_event' % (
+                    self.username or '?', e))
+            return
         except:
             log.err()
             self.transport.loseConnection()
             return
+        # Reset the throttle so a fresh startup-state outage logs immediately.
+        self._deferred_work_logged_at = 0
         if self.desired_pseudoshare_target:
             self.fixed_target = True
             self.target = self.desired_pseudoshare_target
