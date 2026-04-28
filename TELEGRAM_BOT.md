@@ -434,9 +434,34 @@ button on that page lets you revoke them if needed.
 - *"Phone number invalid"* — use the international format with `+` prefix.
 - *No code arrives* — check the Telegram app on the same phone (not SMS);
   the code arrives as a service message from "Telegram".
-- *"Application not allowed"* — happens for very new accounts (under
-  ~24 h old) or accounts with no profile picture / name. Wait a day or
-  fill in basic profile fields, then retry.
+- *Bare "ERROR" popup with no detail when you click Create application*
+  — my.telegram.org's server-side validation is unhelpfully terse.
+  Try these in order:
+  1. **Fill the Description field.**  When **Platform = Other (specify
+     in description)**, the description is mandatory; an empty value
+     produces only the generic "ERROR".  Putting any non-empty text
+     usually fixes it.
+  2. **Switch Platform from "Other" to "Desktop".**  "Other" runs
+     stricter validation; "Desktop" passes for any real use case and
+     has zero behavioural difference for our purposes.
+  3. **Add a URL** — some accounts fail with a blank URL.  Pasting
+     `https://github.com/frstrtr/p2poolBCH` works.
+  4. **Use ASCII-only in App title and Short name.**  Cyrillic / other
+     non-Latin characters there have historically triggered silent
+     rejection.
+  5. **Try incognito / a different browser, or disable any VPN.**
+     Adblock-style extensions and certain VPN exit IPs intermittently
+     break the form.
+- *"Application not allowed" or persistent ERROR after the above* —
+  the account-age gate.  Telegram blocks API app creation for very new
+  accounts (under ~24 h old) or accounts with no profile picture, no
+  display name, or no message history.  Open the Telegram app on your
+  phone, set an avatar and name, send a few messages to anyone, sign
+  out of my.telegram.org, sign back in, and retry tomorrow.
+- *"Why don't I see a Create form?"* — only one app per account is
+  allowed.  If you previously created one for any purpose, **API
+  development tools** displays the existing api_id and api_hash
+  directly; reuse those.
 
 ### Using an MTProto Telegram-app proxy (mtproto variant)
 
