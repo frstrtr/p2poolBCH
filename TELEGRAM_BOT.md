@@ -462,6 +462,21 @@ button on that page lets you revoke them if needed.
   allowed.  If you previously created one for any purpose, **API
   development tools** displays the existing api_id and api_hash
   directly; reuse those.
+- *"Sorry, too many tries. Please try again later."* — rate limit on
+  the login page itself.  Triggered by repeated bad-code or repeated
+  ERROR-on-create cycles.  The lockout is **per egress IP**, not per
+  browser, so opening a different browser does NOT help.  What to do:
+  - **Stop retrying for at least 30–60 min.**  Each retry extends the
+    cooldown.
+  - When you're back in, go **straight** to API development tools.
+    A previous "ERROR" popup may have actually saved the app despite
+    the failure message — your credentials may already be sitting
+    there waiting.
+  - If you must get unblocked sooner, change your egress IP: tether
+    via mobile hotspot, run a SOCKS5 from a VPS you own, or reboot
+    your router if your ISP rotates dynamic IPs.  Datacenter VPN exits
+    are usually already on Telegram's suspicious list and re-trigger
+    the same lockout instantly.
 
 ### Using an MTProto Telegram-app proxy (mtproto variant)
 
