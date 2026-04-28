@@ -330,3 +330,117 @@
     };
 
 })();
+
+/* ====================================================================== *
+ *  BCH legacy → cashaddr conversion
+ *
+ *  Block explorers (blockchair, explorer.bitcoin.com) index BCH addresses
+ *  by their cashaddr form.  Following an explorer link built from a
+ *  legacy 1.../3... address often shows an empty page even though the
+ *  address is valid.  Convert legacy addresses to cashaddr just before
+ *  constructing explorer links — display text remains the original form.
+ *
+ *  Pure-JS implementation, no external dependencies.  Skips base58
+ *  checksum verification (input is trusted: it came from p2pool's own
+ *  share data, already validated server-side).
+ * ====================================================================== */
+(function () {
+    var BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+    var CASHADDR_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+
+    function base58Decode(s) {
+        var num = 0n;
+        var fiftyEight = 58n;
+        for (var i = 0; i < s.length; i++) {
+            var d = BASE58_ALPHABET.indexOf(s.charAt(i));
+            if (d < 0) throw new Error('bad base58 char');
+            num = num * fiftyEight + BigInt(d);
+        }
+        var leadingOnes = 0;
+        while (leadingOnes < s.length && s.charAt(leadingOnes) === '1') leadingOnes++;
+        var bytes = [];
+        var ff = 0xffn;
+        while (num > 0n) { bytes.unshift(Number(num & ff)); num >>= 8n; }
+        for (var j = 0; j < leadingOnes; j++) bytes.unshift(0);
+        return bytes;
+    }
+
+    function expandPrefix(prefix) {
+        var out = [];
+        for (var i = 0; i < prefix.length; i++) out.push(prefix.charCodeAt(i) & 0x1f);
+        out.push(0);
+        return out;
+    }
+
+    // 8-bit -> 5-bit regrouping with right-padding (cashaddr payload encoding)
+    function convertBits8to5(data8) {
+        var acc = 0, bits = 0, out = [];
+        for (var i = 0; i < data8.length; i++) {
+            acc = (acc << 8) | data8[i];
+            bits += 8;
+            while (bits >= 5) {
+                bits -= 5;
+                out.push((acc >> bits) & 0x1f);
+            }
+        }
+        if (bits > 0) out.push((acc << (5 - bits)) & 0x1f);
+        return out;
+    }
+
+    function polymod(values) {
+        var GENERATOR = [0x98f2bc8e61n, 0x79b76d99e2n, 0xf33e5fb3c4n, 0xae2eabe2a8n, 0x1e4f43e470n];
+        var chk = 1n;
+        var mask = 0x07ffffffffn;
+        for (var i = 0; i < values.length; i++) {
+            var top = chk >> 35n;
+            chk = ((chk & mask) << 5n) ^ BigInt(values[i]);
+            for (var b = 0; b < 5; b++) {
+                if ((top >> BigInt(b)) & 1n) chk ^= GENERATOR[b];
+            }
+        }
+        return chk ^ 1n;
+    }
+
+    function legacyToCashaddr(legacy) {
+        var decoded = base58Decode(legacy);
+        if (decoded.length !== 25) throw new Error('not 25-byte legacy');
+        var version = decoded[0];
+        var hash = decoded.slice(1, 21);
+        var cashType, prefix;
+        if (version === 0x00)      { cashType = 0; prefix = 'bitcoincash'; } // P2PKH mainnet
+        else if (version === 0x05) { cashType = 1; prefix = 'bitcoincash'; } // P2SH mainnet
+        else if (version === 0x6f) { cashType = 0; prefix = 'bchtest';     } // P2PKH testnet
+        else if (version === 0xc4) { cashType = 1; prefix = 'bchtest';     } // P2SH testnet
+        else throw new Error('unknown version byte');
+        var versionByte = (cashType << 3);  // 20-byte hash -> size code 0
+        var payload5 = convertBits8to5([versionByte].concat(hash));
+        var expanded = expandPrefix(prefix);
+        var checksumInput = expanded.concat(payload5).concat([0,0,0,0,0,0,0,0]);
+        var pm = polymod(checksumInput);
+        var checksum = [];
+        for (var i = 0; i < 8; i++) checksum.push(Number((pm >> BigInt(5 * (7 - i))) & 0x1fn));
+        var combined = payload5.concat(checksum);
+        var s = prefix + ':';
+        for (var k = 0; k < combined.length; k++) s += CASHADDR_CHARSET.charAt(combined[k]);
+        return s;
+    }
+
+    /**
+     * Normalise any BCH address to a form a block explorer can resolve.
+     *
+     *   bitcoincash:q... / bchtest:q... → returned unchanged
+     *   1.../3.../m.../2.../n... legacy → cashaddr "bitcoincash:..." or "bchtest:..."
+     *   bare q.../p... cashaddr without prefix → "bitcoincash:" prepended
+     *   anything that fails to parse → returned unchanged (caller still gets a link)
+     */
+    window.bchAddressForExplorer = function (addr) {
+        if (!addr) return addr;
+        if (addr.indexOf(':') >= 0) return addr;
+        var first = addr.charAt(0);
+        if (first === '1' || first === '3' || first === 'm' || first === 'n' || first === '2') {
+            try { return legacyToCashaddr(addr); } catch (e) { return addr; }
+        }
+        if (/^[qp][a-z0-9]+$/i.test(addr)) return 'bitcoincash:' + addr.toLowerCase();
+        return addr;
+    };
+})();

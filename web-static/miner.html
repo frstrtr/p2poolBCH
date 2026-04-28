@@ -785,7 +785,7 @@
                 // Update header
                 const addrDiv = document.getElementById('miner_address');
                 var displayAddr = stats.address || minerAddress;
-                addrDiv.innerHTML = '<a href="' + (currency_info.address_explorer_url_prefix || '') + displayAddr + '" target="_blank">' + displayAddr + '</a>';
+                addrDiv.innerHTML = '<a href="' + (currency_info.address_explorer_url_prefix || '') + window.bchAddressForExplorer(displayAddr) + '" target="_blank">' + displayAddr + '</a>';
                 
                 // Update status indicator
                 var statusIndicator = document.getElementById('status_indicator');

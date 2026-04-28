@@ -297,7 +297,7 @@
                         var mainRow = d3.select('#payouts').append('tr');
                         mainRow.append('td').append('a')
                             .text(addr)
-                            .attr('href', currency_info.address_explorer_url_prefix + addr);
+                            .attr('href', currency_info.address_explorer_url_prefix + window.bchAddressForExplorer(addr));
                         mainRow.append('td').text((entry.amount || 0).toFixed(8));
                         
                         // Sub-rows for merged chain addresses

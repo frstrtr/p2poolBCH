@@ -3528,7 +3528,7 @@
                 var mainRow = tbody.append('tr');
                 mainRow.append('td').append('a')
                     .attr('class', 'hash-link')
-                    .attr('href', currency_info.address_explorer_url_prefix + addr)
+                    .attr('href', currency_info.address_explorer_url_prefix + window.bchAddressForExplorer(addr))
                     .attr('target', '_blank')
                     .attr('title', addr)
                     .text(addr);

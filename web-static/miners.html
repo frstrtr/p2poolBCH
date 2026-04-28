@@ -904,7 +904,7 @@
                 
                 // Add external blockchain explorer link
                 addr_div.append('a')
-                    .attr('href', currency_info.address_explorer_url_prefix + miner.address)
+                    .attr('href', currency_info.address_explorer_url_prefix + window.bchAddressForExplorer(miner.address))
                     .attr('target', '_blank')
                     .attr('style', 'margin-left: 10px; font-size: 0.8rem;')
                     .text('↗');

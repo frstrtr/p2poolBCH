@@ -57,7 +57,7 @@
                     b.append('p').text('Timestamp: ' + new Date(1000*share.share_data.timestamp) + ' (' + share.share_data.timestamp + ')');
                     b.append('p').text('Difficulty: ' + target_to_difficulty(share.share_data.target));
                     b.append('p').text('Minimum difficulty: ' + target_to_difficulty(share.share_data.max_target));
-                    b.append('p').text('Payout address: ').append('a').text(share.share_data.payout_address).attr('href', currency_info.address_explorer_url_prefix+share.share_data.payout_address);
+                    b.append('p').text('Payout address: ').append('a').text(share.share_data.payout_address).attr('href', currency_info.address_explorer_url_prefix+window.bchAddressForExplorer(share.share_data.payout_address));
                     b.append('p').text('Donation amount: ' + d3.format('.3p')(share.share_data.donation));
                     b.append('p').text('Last stale: ' + share.share_data.stale_info);
                     b.append('p').text('Nonce: ' + share.share_data.nonce);
