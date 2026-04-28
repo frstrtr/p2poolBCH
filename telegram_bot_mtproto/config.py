@@ -77,18 +77,24 @@ def telethon_proxy():
     if MTPROXY_HOST and MTPROXY_SECRET:
         return ("mtproxy", MTPROXY_HOST, MTPROXY_PORT, MTPROXY_SECRET)
     if BOT_PROXY:
-        from urllib.parse import urlsplit
+        # urllib import is stdlib; deferred to avoid module-load cost when
+        # no proxy is configured.  pylint: disable=import-outside-toplevel
+        from urllib.parse import urlsplit  # noqa: PLC0415
         s = urlsplit(BOT_PROXY)
         host = s.hostname
         port = s.port
         if not host:
             return None
+        # PySocks is only required when a SOCKS/HTTP proxy URL is
+        # actually used; deferring the import means the mtproto bot
+        # still works for MTProxy-only deployments where PySocks isn't
+        # installed.  pylint: disable=import-outside-toplevel
         if s.scheme in ("socks5", "socks5h"):
-            import socks  # PySocks
-            rdns = (s.scheme == "socks5h")
+            import socks  # noqa: PLC0415,F401  # PySocks
+            rdns = s.scheme == "socks5h"
             return (socks.SOCKS5, host, port or 1080, rdns, s.username, s.password)
         if s.scheme in ("http", "https"):
-            import socks
+            import socks  # noqa: PLC0415,F401
             return (socks.HTTP, host, port or 8080, True, s.username, s.password)
     return None
 
@@ -101,7 +107,8 @@ def redact_proxy(p) -> str:
         secret = p[3] or ""
         masked = (secret[:8] + "…") if len(secret) > 8 else "***"
         return f"mtproxy://{p[1]}:{p[2]} secret={masked}"
-    # PySocks tuple
-    scheme = {1: "socks5", 3: "http"}.get(getattr(p[0], "value", p[0]), "proxy")
+    # PySocks tuple: (proxy_type:int, host, port, rdns, user, password)
+    # PySocks codes: SOCKS4=1, SOCKS5=2, HTTP=3.
+    scheme = {1: "socks4", 2: "socks5", 3: "http"}.get(int(p[0]), "proxy")
     user = p[4] if len(p) >= 5 else None
     return f"{scheme}://{(user + ':***@') if user else ''}{p[1]}:{p[2]}"
