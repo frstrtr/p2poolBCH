@@ -346,21 +346,80 @@ versus long-poll traffic.
 
 Proxy lists distributed inside Telegram apps (servers like
 `proxytg.live:443`, `bella-cook.com:443`, `pro.sosproxy.space:443`,
-etc.) speak Telegram's custom **MTProto** wire protocol, not standard
-HTTP CONNECT or SOCKS5. They only work with official Telegram client
-apps and **cannot** be used by `python-telegram-bot` (or any
-HTTP-based bot library).
+`flint…proxytg.ink:…`, `freeon.name:8443`, etc.) speak Telegram's
+custom **MTProto** wire protocol, not standard HTTP CONNECT or SOCKS5.
+They terminate MTProto on one side and forward MTProto to a Telegram
+**datacenter** on the other.
 
-For bots you need a real HTTP/HTTPS/SOCKS5 proxy. Common ways to get
-one when only MTProto is on offer:
+The bot, on the other hand, talks to **`api.telegram.org` over plain
+HTTPS** (Bot API). That's a completely different protocol — there is
+no protocol-level translator that turns MTProto into HTTPS. **Even
+running `mtg` or any other "MTProto bridge" locally will not help**:
+those tools only relay MTProto, never HTTPS.
 
-- **Run a SOCKS5 server you control** on a reachable VPS (e.g.
-  Dante, 3proxy, or `ssh -D 1080 user@vps.example.net`).
-- **Translate MTProto → SOCKS5 locally** using
-  [`mtg`](https://github.com/9seconds/mtg) (`mtg simple-run`) or a
-  similar bridge — non-trivial to set up.
-- Use a **commercial SOCKS5 / HTTPS proxy** (NordVPN SOCKS, Mullvad
-  SOCKS, etc.).
+So MTProto proxies are usable **only inside Telegram apps**. Don't
+copy one into `BOT_PROXY` and expect it to work — the bot will fail
+to reach `api.telegram.org` and PTB will log connection errors.
+
+### What kind of proxy DOES work
+
+Any of these schemes will work in `BOT_PROXY` because PTB/httpx speak
+them natively:
+
+| Scheme | When to use |
+|---|---|
+| `http://host:port` | HTTP CONNECT proxy (most corporate/transparent proxies). |
+| `https://host:port` | HTTPS proxy (TLS to the proxy itself, then CONNECT). |
+| `socks5://host:port` | SOCKS5; bot resolves the hostname locally. |
+| `socks5h://host:port` | SOCKS5; **proxy** resolves the hostname (preferred when DNS to `api.telegram.org` is also blocked). |
+
+Inline credentials are supported: `scheme://user:pass@host:port`.
+
+### Where to get a working proxy
+
+#### A. Commercial VPN providers that expose SOCKS5
+
+Several VPN providers publish SOCKS5 endpoints in addition to the usual
+WireGuard / OpenVPN tunnels. Using SOCKS5 keeps the proxying scoped to
+the bot and leaves the rest of your host's traffic untouched. Always
+verify the provider's current offering and pricing before relying on it.
+
+| Provider | Endpoint format (verify on provider's site) | Auth |
+|---|---|---|
+| **Mullvad VPN** | `socks5h://<server>.relays.mullvad.net:1080` (e.g. `nl-ams-wg-001`) | Reachable only while you're connected to Mullvad WireGuard; no per-request auth. |
+| **NordVPN** | `socks5h://<country>.socks.nordhold.net:1080` (e.g. `nl.socks.nordhold.net`) | Service credentials (different from your account login — generate them in the dashboard). |
+| **Private Internet Access (PIA)** | `socks5h://proxy-nl.privateinternetaccess.com:1080` (region-specific hostnames) | PIA SOCKS5 username/password (separate from VPN account; generate in dashboard). |
+| **IPVanish** | `socks5h://<region>.ipvanish.com:1080` | VPN account credentials. |
+| **TorGuard** | `socks5h://<region>.torguard.org:1085` (TCP) | TorGuard username/password. |
+| **Windscribe (paid)** | `socks5h://<region>.windscribe.com:1080` | Generated in dashboard. |
+
+> **Avoid Tor** (`socks5h://127.0.0.1:9050`) for the bot — Telegram
+> heavily rate-limits or blocks well-known Tor exit IPs and your bot
+> will end up partially functional.
+
+#### B. Self-hosted SOCKS5 (cheapest if you already have a VPS)
+
+If you have any VPS reachable by the bot host (cloud, friend's box, your
+own off-site router), the fastest path to a working SOCKS5 endpoint is
+SSH dynamic forwarding — zero new software to install:
+
+```bash
+# On the box that runs p2pool/the bot:
+ssh -fN -D 0.0.0.0:1080 user@vps.example.net   # background SOCKS5 on :1080
+# Then in /etc/p2pool-bot.env:
+BOT_PROXY=socks5h://127.0.0.1:1080
+```
+
+For a more permanent setup install **Dante** or **3proxy** on the VPS
+and bind a SOCKS5 port with auth. Both are in Ubuntu's apt
+repositories. Self-hosted = you control whether Telegram's anti-abuse
+heuristics flag the IP.
+
+#### C. Egress-only HTTPS proxy
+
+If your network admin gives you a corporate HTTPS proxy
+(`https://proxy.corp.example:8080`), that works too — set
+`BOT_PROXY` to that URL.
 
 ### Native Ubuntu 24.04 deploy — set the proxy
 
@@ -387,21 +446,50 @@ sudo systemctl restart p2pool-bch
 ### Docker deploy — set the proxy
 
 The bot subprocess inherits the container's environment, so any of
-these mechanisms work — pick whichever fits your secrets workflow:
+these mechanisms work — pick whichever fits your topology and secrets
+workflow.
 
-**Option A — `docker run -e BOT_PROXY=...`** (env-var passthrough):
+**Option A — `--network host`** (simplest; BCHN runs on the same
+machine, no port mapping needed). Substitute the four `<PLACEHOLDERS>`:
+
 ```bash
-docker run --rm -d \
+docker stop p2pool-bch 2>/dev/null; docker rm p2pool-bch 2>/dev/null
+
+docker pull ghcr.io/frstrtr/p2poolbch:latest
+
+docker run -d --restart unless-stopped \
+  --network host \
+  --name p2pool-bch \
+  -e RPC_HOST=127.0.0.1 \
+  -e RPC_USER=<your_rpcuser> \
+  -e RPC_PASS=<your_rpcpassword> \
+  -e PAYOUT_ADDRESS=<your_BCH_address> \
+  -e BOT_TOKEN=<token_from_BotFather> \
+  -e BOT_PROXY='socks5h://USER:PASS@proxy.host:1080' \
+  -e P2POOL_EXTRA_ARGS="--give-author 0" \
+  -v p2pool-data:/p2pool/data \
+  ghcr.io/frstrtr/p2poolbch:latest
+```
+
+**Option B — bridged with explicit port mapping** (when BCHN is on a
+different host or you want network isolation):
+
+```bash
+docker run -d --restart unless-stopped \
   --name p2pool-bch \
   -p 9348:9348 -p 9349:9349 \
   -e RPC_HOST=192.168.86.110 \
   -e RPC_USER=bitcoinrpc -e RPC_PASS=changeme \
   -e BOT_TOKEN=123456:ABC-DEF-your-token \
   -e BOT_PROXY=socks5h://USER:PASS@proxy.example.net:1080 \
+  -v p2pool-data:/p2pool/data \
   ghcr.io/frstrtr/p2poolbch:latest
 ```
 
-**Option B — mount `/etc/p2pool-bot.env`** (preferred for secrets):
+**Option C — mount `/etc/p2pool-bot.env`** (preferred for secrets;
+combines with either A or B). Keeps the token and proxy URL out of
+shell history and `docker inspect`:
+
 ```bash
 sudo tee /etc/p2pool-bot.env >/dev/null <<'EOF'
 BOT_TOKEN=123456:ABC-DEF-your-token
@@ -409,28 +497,37 @@ BOT_PROXY=socks5h://USER:PASS@proxy.example.net:1080
 EOF
 sudo chmod 600 /etc/p2pool-bot.env
 
-docker run --rm -d \
+docker run -d --restart unless-stopped \
+  --network host \
   --name p2pool-bch \
-  -p 9348:9348 -p 9349:9349 \
-  -e RPC_HOST=192.168.86.110 \
-  -e RPC_USER=bitcoinrpc -e RPC_PASS=changeme \
+  -e RPC_HOST=127.0.0.1 \
+  -e RPC_USER=<your_rpcuser> -e RPC_PASS=<your_rpcpassword> \
+  -e PAYOUT_ADDRESS=<your_BCH_address> \
+  -e P2POOL_EXTRA_ARGS="--give-author 0" \
   -v /etc/p2pool-bot.env:/etc/p2pool-bot.env:ro \
+  -v p2pool-data:/p2pool/data \
   ghcr.io/frstrtr/p2poolbch:latest
 ```
 
-**Option C — `docker compose`**: uncomment the `BOT_PROXY` example in
+**Option D — `docker compose`**: uncomment the `BOT_PROXY` line in
 the `environment:` block of `docker-compose.yml`, or rely on the
 mounted `/etc/p2pool-bot.env`. Then:
+
 ```bash
-docker compose up -d --pull always
+docker compose pull
+docker compose up -d
 docker compose logs --tail=30 p2pool | grep -i proxy
 ```
 
-After any change, verify the proxy is active:
+After any change, verify the proxy is active in the bot's startup log:
+
 ```bash
 docker logs p2pool-bch 2>&1 | grep "Using outbound proxy"
 # expect: Using outbound proxy for Telegram API: socks5h://USER:***@proxy.example.net:1080
 ```
+
+> **Tip:** pin to a SHA tag (`ghcr.io/frstrtr/p2poolbch:sha-ec8c6af`)
+> for reproducible deploys instead of always-floating `latest`.
 
 ---
 

@@ -93,7 +93,7 @@ using the pre-built GHCR image — no compilation required.
 
 5. *(Optional)* Forward port **9349** on your router to the host for better P2P peer connectivity.
 
-See `TELEGRAM_BOT.md` for the full bot reference (broadcast channels, env-var list, troubleshooting).
+See `TELEGRAM_BOT.md` for the full bot reference (broadcast channels, env-var list, troubleshooting). If your host can't reach `api.telegram.org` directly, the same doc covers `BOT_PROXY` setup with a list of compatible proxy types and known VPN providers.
 
 ---
 
