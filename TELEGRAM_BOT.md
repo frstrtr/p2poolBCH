@@ -398,6 +398,46 @@ custom **MTProto** wire protocol, not standard HTTP CONNECT or SOCKS5.
 If you must use the `ptb` variant, you need a real HTTP CONNECT,
 HTTPS, or SOCKS5 endpoint (covered in the next section).
 
+### Getting `MTPROTO_API_ID` and `MTPROTO_API_HASH`
+
+The mtproto variant needs an MTProto API ID and hash in addition to
+the bot token.  These are free — you create a single "app" entry on
+Telegram's web portal once and reuse the same pair for any number of
+bots forever.
+
+1. **Sign in with the bot owner's personal Telegram account** at
+   <https://my.telegram.org>.  Enter the phone number registered to
+   that account, then type the numeric code that arrives **inside the
+   Telegram app on that phone** (not SMS).  The bot itself cannot log
+   in here — it's only for human accounts.
+2. Click **API development tools**.
+3. First time only, fill out the small form:
+   - **App title:** anything (e.g. `p2pool-bch-notifier`).
+   - **Short name:** anything 5–32 chars (e.g. `p2pool_bch_bot`).
+   - **URL:** can be left blank.
+   - **Platform:** pick **Other** (or **Desktop** — doesn't matter).
+   - **Description:** can be left blank.
+   - Click **Create application**.
+4. The page now shows:
+   - **App api_id** — a 6–8 digit number → use as `MTPROTO_API_ID`.
+   - **App api_hash** — a 32-char hex string → use as `MTPROTO_API_HASH`.
+
+Treat `api_hash` like a credential — store in `/etc/p2pool-bot.env`
+(chmod 600) or pass via `docker -e`, never commit to git.
+
+The same pair is reusable across any number of bot instances; revisit
+the same page later if you forget the values.  A "Drop application"
+button on that page lets you revoke them if needed.
+
+**Common gotchas:**
+
+- *"Phone number invalid"* — use the international format with `+` prefix.
+- *No code arrives* — check the Telegram app on the same phone (not SMS);
+  the code arrives as a service message from "Telegram".
+- *"Application not allowed"* — happens for very new accounts (under
+  ~24 h old) or accounts with no profile picture / name. Wait a day or
+  fill in basic profile fields, then retry.
+
 ### Using an MTProto Telegram-app proxy (mtproto variant)
 
 When `BOT_IMPL=mtproto` and `MTPROXY_HOST` is set, Telethon connects
