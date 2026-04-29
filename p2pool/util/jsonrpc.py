@@ -35,9 +35,32 @@ def _frame_response(id_, result, error):
         obj['jsonrpc'] = '2.0'
     return json.dumps(obj)
 
+_STRATUM_NOTIFICATION_METHODS = frozenset([
+    'mining.notify',
+    'mining.set_difficulty',
+    'mining.set_version_mask',
+    'mining.set_extranonce',
+    'client.reconnect',
+    'client.show_message',
+])
+
 def _frame_request(id_, method, params):
     """Build the JSON for an outgoing JSON-RPC request, honouring the
-    STRATUM_LEGACY_JSONRPC toggle."""
+    STRATUM_LEGACY_JSONRPC toggle.
+
+    Stratum has both true RPC requests (e.g. client.get_version, where the
+    miner sends a response) and unsolicited notifications (mining.notify,
+    mining.set_difficulty, mining.set_version_mask, etc.).  The JSON-RPC
+    spec says notifications MUST have id=null; krizis / ckpool / slush /
+    NiceHash all do this.  The p2pool framework's GenericDeferrer assigns
+    a sequential id to every outgoing call uniformly, which produces
+    non-null ids for notifications too — strict CGMiner-derived parsers
+    in stock Bitmain firmware (Antminer S21+ FR-1.15 suspected) check
+    this and silently reject malformed notifications, which is a strong
+    candidate for the 0-submit cycle behaviour.  This shim forces
+    id=null for any method on the known-notification list."""
+    if method in _STRATUM_NOTIFICATION_METHODS:
+        id_ = None
     obj = {'method': method, 'params': params, 'id': id_}
     if not _LEGACY_JSONRPC:
         obj['jsonrpc'] = '2.0'
