@@ -165,23 +165,31 @@ class StratumRPCMiningProvider(object):
         reactor.callLater(0, self._send_work)
         en1_hex = self._extranonce1.encode('hex')
         en2_size = self.wb.COINBASE_NONCE_LENGTH - len(self._extranonce1)
+        # Subscription IDs: short, session-correlated (en1 prefix + index),
+        # matching krizis's wire format which is observed handling Antminer
+        # S21+ stock FR-1.15 fine.  Strict CGMiner-derived parsers in stock
+        # firmware may have fixed-size buffers for the subscription-id
+        # string and overflow on the legacy 32-char hex constants.  When no
+        # extranonce1 prefix is configured, fall back to short literals.
+        id_prefix = en1_hex if en1_hex else 'p2p'
+        notify_id   = id_prefix + '1'
+        setdiff_id  = id_prefix + '2'
         if NICEHASH_COMPAT:
             # Strict slush/NiceHash form: subscription_details is a LIST of
-            # (method, id) pairs, with a mining.set_difficulty entry.  Some
-            # Bitmain stock firmware (S21+ stock CGMiner) requires this
-            # exact shape and treats the older flat [method, id] as a
-            # protocol error.  Subscription IDs are arbitrary strings —
-            # use stable hex constants so reconnects keep the same IDs.
+            # (method, id) pairs.  The order matters: krizis (and ckpool /
+            # NiceHash) puts mining.notify FIRST then mining.set_difficulty.
+            # Stock CGMiner forks have been observed position-parsing this
+            # array and breaking when the order is reversed.
             return [
                 [
-                    ["mining.set_difficulty", "b4b6693b72a50c7116db18d6497cac52"],
-                    ["mining.notify",         "ae6812eb4cd7735a302a8a9dd95cf71f"],
+                    ["mining.notify",         notify_id],
+                    ["mining.set_difficulty", setdiff_id],
                 ],
                 en1_hex,
                 en2_size,
             ]
         return [
-            ["mining.notify", "ae6812eb4cd7735a302a8a9dd95cf71f"], # subscription details
+            ["mining.notify", notify_id], # subscription details
             en1_hex, # extranonce1
             en2_size, # extranonce2_size
         ]
