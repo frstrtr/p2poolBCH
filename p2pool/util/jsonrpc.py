@@ -1,6 +1,7 @@
 from __future__ import division
 
 import json
+import os
 import weakref
 
 from twisted.internet import defer
@@ -9,6 +10,38 @@ from twisted.python import failure, log
 from twisted.web import client, error
 
 from p2pool.util import deferral, deferred_resource, memoize
+
+# Optional JSON-RPC 1.0 wire format for outgoing messages.  When set,
+# the framework omits the "jsonrpc": "2.0" field from generated
+# responses and request frames.  Strict CGMiner branches in some Bitmain
+# stock firmware (Antminer S21+ FR-1.15 observed) parse only the legacy
+# 1.0 layout and silently fail on the 2.0 marker — they handshake but
+# never submit shares.  Krizis (p2p-spb.xyz, version 77.0.0-12-g5493200)
+# wire-traces show no "jsonrpc" field, and krizis is observed handling
+# FR-1.15 fine.  Default off = legacy (current) 2.0 behaviour.  Affects
+# all jsonrpc.py callers (LineBasedPeer for stratum + HTTPServer for the
+# legacy /getwork endpoint); BCHN's bitcoind RPC client does not go
+# through this module so its requests are unaffected.  Scope is
+# intentionally global since strict miners check both directions.
+_LEGACY_JSONRPC = os.environ.get('STRATUM_LEGACY_JSONRPC', '').strip().lower() in ('1', 'true', 'yes', 'on')
+if _LEGACY_JSONRPC:
+    print 'STRATUM: JSON-RPC 1.0 wire format ENABLED (no "jsonrpc": "2.0" field) via STRATUM_LEGACY_JSONRPC'
+
+def _frame_response(id_, result, error):
+    """Build the JSON for an outgoing JSON-RPC response, honouring the
+    STRATUM_LEGACY_JSONRPC toggle."""
+    obj = {'id': id_, 'result': result, 'error': error}
+    if not _LEGACY_JSONRPC:
+        obj['jsonrpc'] = '2.0'
+    return json.dumps(obj)
+
+def _frame_request(id_, method, params):
+    """Build the JSON for an outgoing JSON-RPC request, honouring the
+    STRATUM_LEGACY_JSONRPC toggle."""
+    obj = {'method': method, 'params': params, 'id': id_}
+    if not _LEGACY_JSONRPC:
+        obj['jsonrpc'] = '2.0'
+    return json.dumps(obj)
 
 class Error(Exception):
     def __init__(self, code, message, data=None):
@@ -93,12 +126,7 @@ def _handle(data, provider, preargs=(), response_handler=None):
             result = None
             error = e._to_obj()
         
-        defer.returnValue(json.dumps(dict(
-            jsonrpc='2.0',
-            id=id_,
-            result=result,
-            error=error,
-        )))
+        defer.returnValue(_frame_response(id_, result, error))
 
 # HTTP
 
@@ -152,12 +180,7 @@ class LineBasedPeer(basic.LineOnlyReceiver):
     
     def __init__(self):
         #basic.LineOnlyReceiver.__init__(self)
-        self._matcher = deferral.GenericDeferrer(max_id=2**30, func=lambda id, method, params: self.sendLine(json.dumps({
-            'jsonrpc': '2.0',
-            'method': method,
-            'params': params,
-            'id': id,
-        })))
+        self._matcher = deferral.GenericDeferrer(max_id=2**30, func=lambda id, method, params: self.sendLine(_frame_request(id, method, params)))
         self.other = Proxy(self._matcher)
     
     def lineReceived(self, line):
