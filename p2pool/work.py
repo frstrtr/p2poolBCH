@@ -368,7 +368,31 @@ class WorkerBridge(worker_interface.WorkerBridge):
             ))
             mm_later = [(aux_work, mm_hashes.index(aux_work['hash']), mm_hashes) for chain_id, aux_work in self.merged_work.value.iteritems()]
         else:
-            mm_data = ''
+            # Optional: inject a *fake* AuxPoW commitment into the coinbase
+            # scriptSig (fabe6d6d magic + zero aux merkle root + dummy
+            # chain config) when STRATUM_FAKE_AUXMM=1.  This produces a
+            # 44-byte scriptSig payload byte-identical-shape to what
+            # krizis (p2p-spb.xyz, real merged-mining BCH+aux) sends.
+            # Strict CGMiner branches in stock Bitmain firmware (Antminer
+            # S21+ FR-1.15 suspected) inspect the coinbase for the merged-
+            # mining marker as a "real production pool" sanity check;
+            # without it they handshake but never submit shares (the 145 s
+            # 0-submit cycle that has resisted every wire-shape toggle).
+            # We DO NOT actually do merged mining — the aux merkle is
+            # zeros, no aux-chain RPC is contacted, no aux block can be
+            # submitted.  This is a content-padding hack to satisfy a
+            # firmware sanity check, not real auxpow.  Default off; safe
+            # because the bytes go inside scriptSig (≤ 100 byte BIP rule)
+            # and don't change the share-chain commitment.
+            import os as _os_for_auxmm_flag
+            if _os_for_auxmm_flag.environ.get('STRATUM_FAKE_AUXMM', '').strip().lower() in ('1', 'true', 'yes', 'on'):
+                mm_data = '\xfa\xbemm' + bitcoin_data.aux_pow_coinbase_type.pack(dict(
+                    merkle_root=0,   # zero — no actual aux chain committed
+                    size=1,          # 1-leaf tree
+                    nonce=0,
+                ))
+            else:
+                mm_data = ''
             mm_later = []
         
         tx_hashes = self.current_work.value['transaction_hashes']
