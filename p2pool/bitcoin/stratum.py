@@ -32,6 +32,11 @@ DISABLE_IDLE_NUDGE   = _envflag('STRATUM_DISABLE_IDLE_NUDGE')
 # spec literally; the older flat form ['mining.notify', id] is silently
 # accepted by bitaxe/Whatsminer/vnish but rejected by strict CGMiner branches.
 NICEHASH_COMPAT      = _envflag('STRATUM_NICEHASH_COMPAT')
+# Per-connection dialog trace: dumps every send/recv with timestamp,
+# peer IP, worker name, method, and key params.  Reconstructs the seconds
+# leading up to a disconnect from journald.  Verbose — leave off in
+# steady state; flip on right before reproducing a disconnect.
+TRACE                = _envflag('STRATUM_TRACE')
 if DISABLE_ASICBOOST:
     print 'STRATUM: ASICBoost (BIP310 version-rolling) DISABLED via STRATUM_DISABLE_ASICBOOST'
 if DISABLE_LATENCY_PING:
@@ -40,6 +45,12 @@ if DISABLE_IDLE_NUDGE:
     print 'STRATUM: idle-reconnect nudge DISABLED via STRATUM_DISABLE_IDLE_NUDGE'
 if NICEHASH_COMPAT:
     print 'STRATUM: NiceHash-compatible subscribe response ENABLED via STRATUM_NICEHASH_COMPAT'
+if TRACE:
+    print 'STRATUM: per-connection dialog trace ENABLED via STRATUM_TRACE'
+
+def _ts():
+    t = time.time()
+    return time.strftime('%H:%M:%S', time.localtime(t)) + ('.%03d' % int((t % 1) * 1000))
 
 class StratumRPCMiningProvider(object):
     def __init__(self, wb, other, transport):
@@ -66,8 +77,21 @@ class StratumRPCMiningProvider(object):
         # so we log at most once per _DEFERRED_WORK_LOG_INTERVAL.
         self._deferred_work_logged_at = 0
 
-    
+    def _trace(self, direction, method, **fields):
+        if not TRACE:
+            return
+        try:
+            ip = self.transport.getPeer().host
+        except Exception:
+            ip = '?'
+        parts = ' '.join('%s=%s' % (k, v) for k, v in fields.items())
+        print '[STRATUM_TRACE] %s [%s] [%s] %s %s%s%s' % (
+            _ts(), ip, self.username or '-', direction, method,
+            ' ' if parts else '', parts)
+
     def rpc_subscribe(self, miner_version=None, session_id=None, *args):
+        self._trace('<--', 'subscribe', ua=repr(miner_version),
+                    form=('nested' if NICEHASH_COMPAT else 'flat'))
         reactor.callLater(0, self._send_work)
         if NICEHASH_COMPAT:
             # Strict slush/NiceHash form: subscription_details is a LIST of
@@ -91,6 +115,7 @@ class StratumRPCMiningProvider(object):
         ]
     
     def rpc_authorize(self, username, password):
+        self._trace('<--', 'authorize', user=username)
         if not hasattr(self, 'authorized'): # authorize can be called many times in one connection
             print '>>>Authorize: %s from %s' % (username, self.transport.getPeer().host)
             self.authorized = username
@@ -148,6 +173,7 @@ class StratumRPCMiningProvider(object):
                         port = 9348
                     # Send graceful client.reconnect; firmware will reconnect and
                     # re-evaluate priority list — priority 1 (this pool) wins.
+                    self._trace('-->', 'reconnect', port=port, idle=int(idle_secs))
                     self.other.svc_client.rpc_reconnect('', port, 0).addErrback(
                         lambda err: self.transport.loseConnection()
                         # If miner doesn't support client.reconnect, force-drop TCP.
@@ -170,6 +196,7 @@ class StratumRPCMiningProvider(object):
 
         t0 = time.time()
         _username_snap = self.username  # snapshot before async callbacks
+        self._trace('-->', 'get_version', purpose='keepalive+rtt')
         d = self.other.svc_client.rpc_get_version()
         def _record_rtt(rtt):
             now_t = time.time()
@@ -245,6 +272,8 @@ class StratumRPCMiningProvider(object):
     def rpc_configure(self, extensions, extensionParameters):
         #extensions is a list of extension codes defined in BIP310
         #extensionParameters is a dict of parameters for each extension code
+        self._trace('<--', 'configure', exts=','.join(extensions),
+                    mask=extensionParameters.get('version-rolling.mask', '-'))
         if 'version-rolling' in extensions:
             # When STRATUM_DISABLE_ASICBOOST is set, decline version-rolling
             # by returning the disabled form.  This mimics vanilla jtoomim
@@ -302,7 +331,10 @@ class StratumRPCMiningProvider(object):
             self.fixed_target = False
             self.target = x['share_target'] if self.target == None else max(x['min_share_target'], self.target)
         jobid = str(random.randrange(2**128))
-        self.other.svc_mining.rpc_set_difficulty(bitcoin_data.target_to_difficulty(self.target)*self.wb.net.DUMB_SCRYPT_DIFF).addErrback(lambda err: None)
+        new_diff = bitcoin_data.target_to_difficulty(self.target)*self.wb.net.DUMB_SCRYPT_DIFF
+        self._trace('-->', 'set_difficulty', diff='%.4g' % new_diff)
+        self.other.svc_mining.rpc_set_difficulty(new_diff).addErrback(lambda err: None)
+        self._trace('-->', 'notify', jobid=jobid, clean=True)
         self.other.svc_mining.rpc_notify(
             jobid, # jobid
             getwork._swap4(pack.IntType(256).pack(x['previous_block'])).encode('hex'), # prevhash
@@ -318,6 +350,8 @@ class StratumRPCMiningProvider(object):
     
     def rpc_submit(self, worker_name, job_id, extranonce2, ntime, nonce, version_bits = None, *args):
         #asicboost: version_bits is the version mask that the miner used
+        self._trace('<--', 'submit', worker=worker_name, jobid=job_id,
+                    nonce=nonce, vmask=(version_bits or '-'))
         worker_name = worker_name.strip()
         # Track every submit attempt (regardless of accept/reject) for diagnostics
         worker_info = self.wb.connected_workers.get(worker_name)
@@ -384,9 +418,29 @@ class StratumRPCMiningProvider(object):
 class StratumProtocol(jsonrpc.LineBasedPeer):
     def connectionMade(self):
         self.svc_mining = StratumRPCMiningProvider(self.factory.wb, self.other, self.transport)
-    
+        if TRACE:
+            try:
+                peer = self.transport.getPeer()
+                print '[STRATUM_TRACE] %s [%s:%d] [-] == TCP_CONNECT' % (
+                    _ts(), peer.host, peer.port)
+            except Exception:
+                pass
+
     def connectionLost(self, reason):
         svc = self.svc_mining
+        if TRACE:
+            try:
+                peer = self.transport.getPeer()
+                who = getattr(svc, 'username', None) or '-'
+                # reason.value carries the underlying twisted error (e.g.
+                # ConnectionDone, ConnectionLost, RST) — exactly the field
+                # we want to disambiguate "miner sent FIN" vs "we hit a
+                # protocol error" vs "TCP RST from middlebox".
+                print '[STRATUM_TRACE] %s [%s:%d] [%s] == TCP_DISCONNECT reason=%r' % (
+                    _ts(), peer.host, peer.port, who,
+                    getattr(reason, 'value', reason))
+            except Exception:
+                pass
         if getattr(svc, 'address', None) is not None:
             try:
                 peer_ip = self.transport.getPeer().host
