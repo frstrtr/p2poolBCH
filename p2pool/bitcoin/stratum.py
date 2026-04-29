@@ -1,4 +1,5 @@
 import json
+import os
 import random
 import sys
 import time
@@ -12,6 +13,33 @@ from p2pool.util import expiring_dict, jsonrpc, pack
 
 def clip(num, bot, top):
     return min(top, max(bot, num))
+
+# ── Diagnostic / compatibility toggles ────────────────────────────────────
+# Set the env var to "1" / "true" / "yes" to disable the feature.  Useful
+# for A/B testing which post-handshake server-pushed RPC a strict-firmware
+# miner (e.g. Antminer S21+ on stock) is rejecting.  Leave unset for the
+# default behaviour.  Values are read once at module load — restart the
+# p2pool process for changes to take effect.
+def _envflag(name):
+    return os.environ.get(name, '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+DISABLE_ASICBOOST    = _envflag('STRATUM_DISABLE_ASICBOOST')
+DISABLE_LATENCY_PING = _envflag('STRATUM_DISABLE_LATENCY_PING')
+DISABLE_IDLE_NUDGE   = _envflag('STRATUM_DISABLE_IDLE_NUDGE')
+# Strict slush/NiceHash-style mining.subscribe response (nested array of
+# (method, id) pairs, includes mining.set_difficulty subscription).
+# Required by some Bitmain stock firmware (S21+ stock) which enforces the
+# spec literally; the older flat form ['mining.notify', id] is silently
+# accepted by bitaxe/Whatsminer/vnish but rejected by strict CGMiner branches.
+NICEHASH_COMPAT      = _envflag('STRATUM_NICEHASH_COMPAT')
+if DISABLE_ASICBOOST:
+    print 'STRATUM: ASICBoost (BIP310 version-rolling) DISABLED via STRATUM_DISABLE_ASICBOOST'
+if DISABLE_LATENCY_PING:
+    print 'STRATUM: client.get_version latency ping DISABLED via STRATUM_DISABLE_LATENCY_PING'
+if DISABLE_IDLE_NUDGE:
+    print 'STRATUM: idle-reconnect nudge DISABLED via STRATUM_DISABLE_IDLE_NUDGE'
+if NICEHASH_COMPAT:
+    print 'STRATUM: NiceHash-compatible subscribe response ENABLED via STRATUM_NICEHASH_COMPAT'
 
 class StratumRPCMiningProvider(object):
     def __init__(self, wb, other, transport):
@@ -41,7 +69,21 @@ class StratumRPCMiningProvider(object):
     
     def rpc_subscribe(self, miner_version=None, session_id=None, *args):
         reactor.callLater(0, self._send_work)
-        
+        if NICEHASH_COMPAT:
+            # Strict slush/NiceHash form: subscription_details is a LIST of
+            # (method, id) pairs, with a mining.set_difficulty entry.  Some
+            # Bitmain stock firmware (S21+ stock CGMiner) requires this
+            # exact shape and treats the older flat [method, id] as a
+            # protocol error.  Subscription IDs are arbitrary strings —
+            # use stable hex constants so reconnects keep the same IDs.
+            return [
+                [
+                    ["mining.set_difficulty", "b4b6693b72a50c7116db18d6497cac52"],
+                    ["mining.notify",         "ae6812eb4cd7735a302a8a9dd95cf71f"],
+                ],
+                "",  # extranonce1
+                self.wb.COINBASE_NONCE_LENGTH,
+            ]
         return [
             ["mining.notify", "ae6812eb4cd7735a302a8a9dd95cf71f"], # subscription details
             "", # extranonce1
@@ -71,6 +113,13 @@ class StratumRPCMiningProvider(object):
     _IDLE_RECONNECT_AFTER = 15 * 60   # 15 min idle threshold
     _IDLE_RECONNECT_COOLDOWN = 15 * 60 # minimum gap between reconnect nudges
 
+    # client.get_version cadence.  ALSO acts as a stratum keepalive — most
+    # ASIC firmware enforces a client-side "no pool data for N seconds"
+    # timeout (Antminer S21+ stock: 300 s).  Sending the ping just inside
+    # that window prevents miners from declaring the connection lost
+    # during quiet periods between mining.notify pushes.
+    _LATENCY_PING_INTERVAL = 120  # seconds — well under the 300 s S21+ cutoff
+
     def _ping_once(self):
         self._ping_call = None
         if not self._ping_active or not self.username:
@@ -81,30 +130,43 @@ class StratumRPCMiningProvider(object):
         # seconds, send client.reconnect so the miner drops and re-evaluates
         # pool priorities.  Braiins OS / most ASIC firmware will reconnect to
         # pool priority 1 (this node) after receiving client.reconnect.
-        now = time.time()
-        worker_info = self.wb.connected_workers.get(self.username)
-        if worker_info is not None:
-            last_submit = worker_info.get('last_submit_time', 0)
-            connected_since = worker_info.get('since', now)
-            idle_secs = now - last_submit if last_submit else now - connected_since
-            cooldown_ok = now - self._last_reconnect_at > self._IDLE_RECONNECT_COOLDOWN
-            if idle_secs >= self._IDLE_RECONNECT_AFTER and cooldown_ok:
-                self._last_reconnect_at = now
-                worker_info['reconnect_nudges'] = worker_info.get('reconnect_nudges', 0) + 1
-                try:
-                    port = self.transport.getHost().port
-                except Exception:
-                    port = 9348
-                # Send graceful client.reconnect; firmware will reconnect and
-                # re-evaluate priority list — priority 1 (this pool) wins.
-                self.other.svc_client.rpc_reconnect('', port, 0).addErrback(
-                    lambda err: self.transport.loseConnection()
-                    # If miner doesn't support client.reconnect, force-drop TCP.
-                    # The miner will reconnect immediately and pick priority 1.
-                )
-                if self._ping_active:
-                    self._ping_call = reactor.callLater(300, self._ping_once)
-                return  # skip latency ping this cycle
+        # Skip entirely when STRATUM_DISABLE_IDLE_NUDGE is set.
+        if not DISABLE_IDLE_NUDGE:
+            now = time.time()
+            worker_info = self.wb.connected_workers.get(self.username)
+            if worker_info is not None:
+                last_submit = worker_info.get('last_submit_time', 0)
+                connected_since = worker_info.get('since', now)
+                idle_secs = now - last_submit if last_submit else now - connected_since
+                cooldown_ok = now - self._last_reconnect_at > self._IDLE_RECONNECT_COOLDOWN
+                if idle_secs >= self._IDLE_RECONNECT_AFTER and cooldown_ok:
+                    self._last_reconnect_at = now
+                    worker_info['reconnect_nudges'] = worker_info.get('reconnect_nudges', 0) + 1
+                    try:
+                        port = self.transport.getHost().port
+                    except Exception:
+                        port = 9348
+                    # Send graceful client.reconnect; firmware will reconnect and
+                    # re-evaluate priority list — priority 1 (this pool) wins.
+                    self.other.svc_client.rpc_reconnect('', port, 0).addErrback(
+                        lambda err: self.transport.loseConnection()
+                        # If miner doesn't support client.reconnect, force-drop TCP.
+                        # The miner will reconnect immediately and pick priority 1.
+                    )
+                    if self._ping_active:
+                        self._ping_call = reactor.callLater(self._LATENCY_PING_INTERVAL, self._ping_once)
+                    return  # skip latency ping this cycle
+
+        # Skip the client.get_version probe entirely when
+        # STRATUM_DISABLE_LATENCY_PING is set.  Useful when strict firmware
+        # mishandles unexpected server-pushed RPCs during/after the
+        # subscribe→configure→authorize handshake.  Still reschedule the
+        # tick so the idle-nudge check above keeps running unless that's
+        # also disabled (in which case there's nothing left to do).
+        if DISABLE_LATENCY_PING:
+            if self._ping_active and not DISABLE_IDLE_NUDGE:
+                self._ping_call = reactor.callLater(self._LATENCY_PING_INTERVAL, self._ping_once)
+            return
 
         t0 = time.time()
         _username_snap = self.username  # snapshot before async callbacks
@@ -124,7 +186,7 @@ class StratumRPCMiningProvider(object):
         def on_response(result):
             _record_rtt(time.time() - t0)
             if self._ping_active:
-                self._ping_call = reactor.callLater(300, self._ping_once)
+                self._ping_call = reactor.callLater(self._LATENCY_PING_INTERVAL, self._ping_once)
         def on_error(err):
             if err.check(defer.TimeoutError):
                 # Miner silently ignored client.get_version (stock Antminer,
@@ -177,13 +239,19 @@ class StratumRPCMiningProvider(object):
                 # network round-trip, so record the RTT.
                 _record_rtt(time.time() - t0)
             if self._ping_active:
-                self._ping_call = reactor.callLater(300, self._ping_once)
+                self._ping_call = reactor.callLater(self._LATENCY_PING_INTERVAL, self._ping_once)
         d.addCallbacks(on_response, on_error)
 
     def rpc_configure(self, extensions, extensionParameters):
         #extensions is a list of extension codes defined in BIP310
         #extensionParameters is a dict of parameters for each extension code
         if 'version-rolling' in extensions:
+            # When STRATUM_DISABLE_ASICBOOST is set, decline version-rolling
+            # by returning the disabled form.  This mimics vanilla jtoomim
+            # p2pool which lacks rpc_configure entirely; strict firmware
+            # (Antminer stock) then falls back to non-rolled mining.
+            if DISABLE_ASICBOOST:
+                return {"version-rolling": False}
             #mask from miner is mandatory but we dont use it
             miner_mask = extensionParameters['version-rolling.mask']
             #min-bit-count from miner is mandatory but we dont use it
