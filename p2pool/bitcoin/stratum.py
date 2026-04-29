@@ -23,9 +23,32 @@ def clip(num, bot, top):
 def _envflag(name):
     return os.environ.get(name, '').strip().lower() in ('1', 'true', 'yes', 'on')
 
+def _envfloat(name, default=0.0):
+    try:
+        return float(os.environ.get(name, '').strip() or default)
+    except ValueError:
+        return default
+
 DISABLE_ASICBOOST    = _envflag('STRATUM_DISABLE_ASICBOOST')
 DISABLE_LATENCY_PING = _envflag('STRATUM_DISABLE_LATENCY_PING')
 DISABLE_IDLE_NUDGE   = _envflag('STRATUM_DISABLE_IDLE_NUDGE')
+# Minimum initial pseudoshare difficulty floor (in stratum diff units).
+# Stock Bitmain firmware (Antminer S21+ FR-1.15+) silently refuses to
+# submit shares when set_difficulty is below an internal threshold
+# (~1k–16k depending on model/build).  Without submits, vardiff has no
+# samples to adapt and stays stuck at the cold-start seed (often ~257
+# on a busy node) — and the firmware then closes the connection cleanly
+# after ~90 s ("no shares accepted in N s, try the backup pool").
+# Setting this floor ensures the *first* notify already meets the
+# firmware's threshold; vardiff samples on the first submit and takes
+# over normally from there.  Vnish, T21, S19, and bitaxe all submit
+# fine at lower diffs so they aren't broken by raising this floor —
+# they just produce shares less often (per-share hashrate accuracy
+# drops slightly for the small ones).  Default 0 = no floor (legacy
+# behaviour).  Recommended: 16384–65536 for fleets containing stock
+# Antminer S21/S21+.  Clamped to consensus min_share_target inside
+# _send_work so we never produce sub-consensus pseudoshares.
+MIN_INITIAL_DIFF     = _envfloat('STRATUM_MIN_INITIAL_DIFF', 0.0)
 # Strict slush/NiceHash-style mining.subscribe response (nested array of
 # (method, id) pairs, includes mining.set_difficulty subscription).
 # Required by some Bitmain stock firmware (S21+ stock) which enforces the
@@ -47,6 +70,8 @@ if NICEHASH_COMPAT:
     print 'STRATUM: NiceHash-compatible subscribe response ENABLED via STRATUM_NICEHASH_COMPAT'
 if TRACE:
     print 'STRATUM: per-connection dialog trace ENABLED via STRATUM_TRACE'
+if MIN_INITIAL_DIFF > 0:
+    print 'STRATUM: minimum pseudoshare-difficulty floor = %g via STRATUM_MIN_INITIAL_DIFF' % MIN_INITIAL_DIFF
 
 def _ts():
     t = time.time()
@@ -330,6 +355,17 @@ class StratumRPCMiningProvider(object):
         else:
             self.fixed_target = False
             self.target = x['share_target'] if self.target == None else max(x['min_share_target'], self.target)
+        # Apply STRATUM_MIN_INITIAL_DIFF floor (env-gated, default off).
+        # Smaller target = harder = higher stratum diff; we clamp self.target
+        # *down* to the configured floor's target equivalent, then re-clamp
+        # *up* to consensus min_share_target.  Skipped for fixed_target users
+        # (operator opted into a manual diff via the worker name suffix).
+        if MIN_INITIAL_DIFF > 0 and not self.fixed_target:
+            floor_target = bitcoin_data.difficulty_to_target(
+                MIN_INITIAL_DIFF / self.wb.net.DUMB_SCRYPT_DIFF)
+            if self.target > floor_target:
+                self.target = floor_target
+            self.target = max(x['min_share_target'], self.target)
         jobid = str(random.randrange(2**128))
         new_diff = bitcoin_data.target_to_difficulty(self.target)*self.wb.net.DUMB_SCRYPT_DIFF
         self._trace('-->', 'set_difficulty', diff='%.4g' % new_diff)
