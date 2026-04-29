@@ -28,6 +28,17 @@ jobs:
       # ── Checkout ──────────────────────────────────────────────────────────
       - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so 'git describe' resolves tags
+
+      # ── Resolve build version ─────────────────────────────────────────────
+      # Bake the result of 'git describe --always --dirty' into a build arg
+      # consumed by the Dockerfile (writes /p2pool/VERSION).  Without this
+      # the image runs without git/.git and reports "unknown 7032706f6f6c"
+      # (= 'p2pool' in hex) on the dashboard.
+      - name: Resolve P2POOL_VERSION
+        id: ver
+        run: echo "version=$(git describe --always --dirty)" >> "$GITHUB_OUTPUT"
 
       # ── Docker toolchain ──────────────────────────────────────────────────
       - name: Set up Docker Buildx
@@ -68,6 +79,8 @@ jobs:
           push: false
           load: true
           tags: p2poolbch:ci
+          build-args: |
+            P2POOL_VERSION=${{ steps.ver.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -102,5 +115,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            P2POOL_VERSION=${{ steps.ver.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

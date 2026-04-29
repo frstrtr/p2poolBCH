@@ -103,6 +103,29 @@ COPY . .
 COPY contrib/docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
+# Bake the build's git revision into a VERSION file so _get_version() in
+# p2pool/__init__.py reports something useful at runtime instead of falling
+# through to "unknown 7032706f6f6c" (= ASCII 'p2pool' in hex) when no git
+# binary or .git directory is available in the runtime image.  The build
+# action / docker buildx command should pass --build-arg P2POOL_VERSION=...
+# (e.g. "$(git describe --always --dirty)").  Falls back to extracting from
+# the bind-mounted .git/HEAD if neither was passed.
+ARG P2POOL_VERSION=
+RUN set -e; \
+    if [ -n "${P2POOL_VERSION}" ]; then \
+        echo "${P2POOL_VERSION}" > /p2pool/VERSION; \
+    elif [ -f /p2pool/.git/HEAD ]; then \
+        head_ref=$(cat /p2pool/.git/HEAD); \
+        case "$head_ref" in \
+            "ref: "*) ref=${head_ref#ref: }; \
+                      cat "/p2pool/.git/$ref" 2>/dev/null | cut -c1-7 > /p2pool/VERSION ;; \
+            *)        echo "$head_ref" | cut -c1-7 > /p2pool/VERSION ;; \
+        esac; \
+    else \
+        echo "docker-build" > /p2pool/VERSION; \
+    fi; \
+    echo "Baked p2pool VERSION=$(cat /p2pool/VERSION)"
+
 # 9348 — Stratum + Web UI (miners connect here)
 # 9349 — p2pool P2P network (inter-node, forward from router)
 EXPOSE 9348 9349
