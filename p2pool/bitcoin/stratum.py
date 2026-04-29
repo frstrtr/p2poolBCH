@@ -32,6 +32,20 @@ def _envfloat(name, default=0.0):
 DISABLE_ASICBOOST    = _envflag('STRATUM_DISABLE_ASICBOOST')
 DISABLE_LATENCY_PING = _envflag('STRATUM_DISABLE_LATENCY_PING')
 DISABLE_IDLE_NUDGE   = _envflag('STRATUM_DISABLE_IDLE_NUDGE')
+# Send mining.notify version/nbits/ntime hex fields as little-endian byte
+# sequences instead of big-endian (the legacy behaviour).  p2pool-cc and
+# some custom forks default to LE; the stratum protocol never settled on
+# one and historic implementations diverge.  Symptoms of the wrong order
+# on a strict-firmware miner: the connection handshakes cleanly, jobs are
+# accepted by the firmware's parser, but **no shares are ever submitted**
+# — the firmware's internal timestamp/target sanity check decides every
+# computed share is invalid (often manifests as 'stratum time … seconds
+# in the future' on miners that log).  Antminer S21+ stock FR-1.15 is a
+# suspected case (FR-1.42 / vnish / T21 / S19 / bitaxe all submit fine
+# under the BE default).  Default off = legacy BE behaviour.  Toggle on
+# only if a strict-firmware miner is connecting + handshake-completing
+# but never submitting, AND raising STRATUM_MIN_INITIAL_DIFF didn't help.
+NOTIFY_HEX_LE        = _envflag('STRATUM_NOTIFY_HEX_LE')
 # Minimum initial pseudoshare difficulty floor (in stratum diff units).
 # Stock Bitmain firmware (Antminer S21+ FR-1.15+) silently refuses to
 # submit shares when set_difficulty is below an internal threshold
@@ -72,6 +86,8 @@ if TRACE:
     print 'STRATUM: per-connection dialog trace ENABLED via STRATUM_TRACE'
 if MIN_INITIAL_DIFF > 0:
     print 'STRATUM: minimum pseudoshare-difficulty floor = %g via STRATUM_MIN_INITIAL_DIFF' % MIN_INITIAL_DIFF
+if NOTIFY_HEX_LE:
+    print 'STRATUM: mining.notify version/nbits/ntime hex sent as LITTLE-ENDIAN via STRATUM_NOTIFY_HEX_LE'
 
 def _ts():
     t = time.time()
@@ -371,15 +387,28 @@ class StratumRPCMiningProvider(object):
         self._trace('-->', 'set_difficulty', diff='%.4g' % new_diff)
         self.other.svc_mining.rpc_set_difficulty(new_diff).addErrback(lambda err: None)
         self._trace('-->', 'notify', jobid=jobid, clean=True)
+        # Hex encoding of the 4-byte fields version/nbits/ntime: legacy
+        # default is BE (LE pack + _swap4 = BE bytes); STRATUM_NOTIFY_HEX_LE
+        # skips _swap4 to emit raw LE bytes (matches p2pool-cc's default).
+        # prevhash and merkle branches always go through _swap4 — that
+        # convention is fixed by the stratum protocol.
+        if NOTIFY_HEX_LE:
+            version_hex = pack.IntType(32).pack(x['version']).encode('hex')
+            nbits_hex   = pack.IntType(32).pack(x['bits'].bits).encode('hex')
+            ntime_hex   = pack.IntType(32).pack(x['timestamp']).encode('hex')
+        else:
+            version_hex = getwork._swap4(pack.IntType(32).pack(x['version'])).encode('hex')
+            nbits_hex   = getwork._swap4(pack.IntType(32).pack(x['bits'].bits)).encode('hex')
+            ntime_hex   = getwork._swap4(pack.IntType(32).pack(x['timestamp'])).encode('hex')
         self.other.svc_mining.rpc_notify(
             jobid, # jobid
             getwork._swap4(pack.IntType(256).pack(x['previous_block'])).encode('hex'), # prevhash
             x['coinb1'].encode('hex'), # coinb1
             x['coinb2'].encode('hex'), # coinb2
             [pack.IntType(256).pack(s).encode('hex') for s in x['merkle_link']['branch']], # merkle_branch
-            getwork._swap4(pack.IntType(32).pack(x['version'])).encode('hex'), # version
-            getwork._swap4(pack.IntType(32).pack(x['bits'].bits)).encode('hex'), # nbits
-            getwork._swap4(pack.IntType(32).pack(x['timestamp'])).encode('hex'), # ntime
+            version_hex,
+            nbits_hex,
+            ntime_hex,
             True, # clean_jobs
         ).addErrback(lambda err: None)
         self.handler_map[jobid] = x, got_response
@@ -415,13 +444,22 @@ class StratumRPCMiningProvider(object):
             nversion = (job_version & ~self.pool_version_mask) | (int(version_bits,16) & self.pool_version_mask)
             #nversion = nversion & int(version_bits,16)
 
+        # Match the byte-order convention used in rpc_notify above: when
+        # we send LE hex, the miner echoes ntime/nonce back in LE hex
+        # too, and we must decode without _swap4 to recover the integer.
+        if NOTIFY_HEX_LE:
+            ntime_int = pack.IntType(32).unpack(ntime.decode('hex'))
+            nonce_int = pack.IntType(32).unpack(nonce.decode('hex'))
+        else:
+            ntime_int = pack.IntType(32).unpack(getwork._swap4(ntime.decode('hex')))
+            nonce_int = pack.IntType(32).unpack(getwork._swap4(nonce.decode('hex')))
         header = dict(
             version=nversion,
             previous_block=x['previous_block'],
             merkle_root=bitcoin_data.check_merkle_link(bitcoin_data.hash256(new_packed_gentx), x['merkle_link']), # new_packed_gentx has witness data stripped
-            timestamp=pack.IntType(32).unpack(getwork._swap4(ntime.decode('hex'))),
+            timestamp=ntime_int,
             bits=x['bits'],
-            nonce=pack.IntType(32).unpack(getwork._swap4(nonce.decode('hex'))),
+            nonce=nonce_int,
         )
         result = got_response(header, worker_name, coinb_nonce, self.target)
 
