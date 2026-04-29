@@ -63,6 +63,24 @@ NOTIFY_HEX_LE        = _envflag('STRATUM_NOTIFY_HEX_LE')
 # Antminer S21/S21+.  Clamped to consensus min_share_target inside
 # _send_work so we never produce sub-consensus pseudoshares.
 MIN_INITIAL_DIFF     = _envfloat('STRATUM_MIN_INITIAL_DIFF', 0.0)
+# Length of the server-assigned extranonce1 prefix, in BYTES.  Stratum
+# convention: the pool reserves a session-unique extranonce1 prefix and
+# the miner extends it with extranonce2 to form the full coinbase nonce
+# slot.  jtoomim p2pool BCH sends extranonce1="" (zero bytes) +
+# extranonce2_size=COINBASE_NONCE_LENGTH (4) historically.  Strict
+# firmware (observed: Antminer S21+ stock FR-1.15) silently chokes on
+# the empty extranonce1 and never submits shares — this is the most
+# likely root cause of the 145 s 0-submit clean-FIN cycle and matches
+# the behaviour seen on krizis (p2p-spb.xyz, version 77.0.0-12-g5493200)
+# which assigns a 1-byte extranonce1 ("fa") and en2_size=3 and is
+# observed handling FR-1.15 fine.  Set this to 1 (or higher) to match
+# ckpool / slush / NiceHash convention; extranonce2_size shrinks by the
+# same amount so the total nonce slot stays at COINBASE_NONCE_LENGTH.
+# Each stratum session generates a fresh os.urandom() value so
+# different connections get distinct extranonce1 prefixes.  Default 0 =
+# legacy empty extranonce1.  Recommended: 1 if any miner in the fleet
+# is Antminer stock-firmware FR-1.15 or earlier.
+EXTRANONCE1_LEN      = int(_envfloat('STRATUM_EXTRANONCE1_LEN', 0))
 # Strict slush/NiceHash-style mining.subscribe response (nested array of
 # (method, id) pairs, includes mining.set_difficulty subscription).
 # Required by some Bitmain stock firmware (S21+ stock) which enforces the
@@ -88,6 +106,8 @@ if MIN_INITIAL_DIFF > 0:
     print 'STRATUM: minimum pseudoshare-difficulty floor = %g via STRATUM_MIN_INITIAL_DIFF' % MIN_INITIAL_DIFF
 if NOTIFY_HEX_LE:
     print 'STRATUM: mining.notify version/nbits/ntime hex sent as LITTLE-ENDIAN via STRATUM_NOTIFY_HEX_LE'
+if EXTRANONCE1_LEN > 0:
+    print 'STRATUM: server-assigned extranonce1 = %d byte(s) per session via STRATUM_EXTRANONCE1_LEN' % EXTRANONCE1_LEN
 
 def _ts():
     t = time.time()
@@ -117,6 +137,15 @@ class StratumRPCMiningProvider(object):
         # phases (peers connecting / sharechain download / bitcoind down)
         # so we log at most once per _DEFERRED_WORK_LOG_INTERVAL.
         self._deferred_work_logged_at = 0
+        # Per-session server-assigned extranonce1 (see STRATUM_EXTRANONCE1_LEN).
+        # When EXTRANONCE1_LEN==0 this is the empty string and the legacy
+        # behaviour is preserved exactly: extranonce1="" is sent, the miner
+        # owns the full COINBASE_NONCE_LENGTH-byte nonce slot.
+        if EXTRANONCE1_LEN > 0:
+            n = min(EXTRANONCE1_LEN, self.wb.COINBASE_NONCE_LENGTH - 1)
+            self._extranonce1 = os.urandom(n)
+        else:
+            self._extranonce1 = b''
 
     def _trace(self, direction, method, **fields):
         if not TRACE:
@@ -134,6 +163,8 @@ class StratumRPCMiningProvider(object):
         self._trace('<--', 'subscribe', ua=repr(miner_version),
                     form=('nested' if NICEHASH_COMPAT else 'flat'))
         reactor.callLater(0, self._send_work)
+        en1_hex = self._extranonce1.encode('hex')
+        en2_size = self.wb.COINBASE_NONCE_LENGTH - len(self._extranonce1)
         if NICEHASH_COMPAT:
             # Strict slush/NiceHash form: subscription_details is a LIST of
             # (method, id) pairs, with a mining.set_difficulty entry.  Some
@@ -146,13 +177,13 @@ class StratumRPCMiningProvider(object):
                     ["mining.set_difficulty", "b4b6693b72a50c7116db18d6497cac52"],
                     ["mining.notify",         "ae6812eb4cd7735a302a8a9dd95cf71f"],
                 ],
-                "",  # extranonce1
-                self.wb.COINBASE_NONCE_LENGTH,
+                en1_hex,
+                en2_size,
             ]
         return [
             ["mining.notify", "ae6812eb4cd7735a302a8a9dd95cf71f"], # subscription details
-            "", # extranonce1
-            self.wb.COINBASE_NONCE_LENGTH, # extranonce2_size
+            en1_hex, # extranonce1
+            en2_size, # extranonce2_size
         ]
     
     def rpc_authorize(self, username, password):
@@ -428,7 +459,14 @@ class StratumRPCMiningProvider(object):
             #self.other.svc_client.rpc_reconnect().addErrback(lambda err: None)
             return False
         x, got_response = self.handler_map[job_id]
-        coinb_nonce = extranonce2.decode('hex')
+        # Full coinbase nonce = our session's extranonce1 (server-assigned
+        # prefix, possibly empty) + the miner's submitted extranonce2.
+        # The combined length must still equal COINBASE_NONCE_LENGTH so
+        # the resulting coinbase has the exact width the share-chain
+        # generator built coinb1/coinb2 around.
+        miner_en2 = extranonce2.decode('hex')
+        assert len(miner_en2) == self.wb.COINBASE_NONCE_LENGTH - len(self._extranonce1)
+        coinb_nonce = self._extranonce1 + miner_en2
         assert len(coinb_nonce) == self.wb.COINBASE_NONCE_LENGTH
         new_packed_gentx = x['coinb1'] + coinb_nonce + x['coinb2']
 
