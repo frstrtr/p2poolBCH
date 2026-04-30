@@ -81,6 +81,21 @@ MIN_INITIAL_DIFF     = _envfloat('STRATUM_MIN_INITIAL_DIFF', 0.0)
 # legacy empty extranonce1.  Recommended: 1 if any miner in the fleet
 # is Antminer stock-firmware FR-1.15 or earlier.
 EXTRANONCE1_LEN      = int(_envfloat('STRATUM_EXTRANONCE1_LEN', 0))
+# Defer the first set_difficulty/notify push until *after* mining.authorize
+# completes, instead of also firing one immediately after mining.subscribe.
+# Legacy behaviour: rpc_subscribe schedules a _send_work, then rpc_authorize
+# also schedules one — producing TWO consecutive clean=true notifies within
+# ~250 ms of each other.  Krizis (and ckpool / NiceHash / slush) send ONE
+# notify after the full handshake.  Strict CGMiner branches in stock Bitmain
+# firmware (Antminer S21+ FR-1.15) may interpret two clean=true notifies
+# within sub-second as "the pool just had a transient reset" and lose trust
+# (-> 145 s 0-submit cycle).  Discovered via paired wire-tap with
+# scripts/asic_simulator.py.  Set STRATUM_NOTIFY_AFTER_AUTH=1 to skip the
+# subscribe-time send_work call; authorize-time send_work is unchanged so
+# the miner still gets work as soon as the handshake completes.  Default
+# off = legacy double-notify.  Recommended on if any FR-1.15 stock miners
+# are connecting.
+NOTIFY_AFTER_AUTH    = _envflag('STRATUM_NOTIFY_AFTER_AUTH')
 # Strict slush/NiceHash-style mining.subscribe response (nested array of
 # (method, id) pairs, includes mining.set_difficulty subscription).
 # Required by some Bitmain stock firmware (S21+ stock) which enforces the
@@ -108,6 +123,8 @@ if NOTIFY_HEX_LE:
     print 'STRATUM: mining.notify version/nbits/ntime hex sent as LITTLE-ENDIAN via STRATUM_NOTIFY_HEX_LE'
 if EXTRANONCE1_LEN > 0:
     print 'STRATUM: server-assigned extranonce1 = %d byte(s) per session via STRATUM_EXTRANONCE1_LEN' % EXTRANONCE1_LEN
+if NOTIFY_AFTER_AUTH:
+    print 'STRATUM: first work-push DEFERRED to post-authorize (no double-notify) via STRATUM_NOTIFY_AFTER_AUTH'
 
 def _ts():
     t = time.time()
@@ -162,7 +179,11 @@ class StratumRPCMiningProvider(object):
     def rpc_subscribe(self, miner_version=None, session_id=None, *args):
         self._trace('<--', 'subscribe', ua=repr(miner_version),
                     form=('nested' if NICEHASH_COMPAT else 'flat'))
-        reactor.callLater(0, self._send_work)
+        # Skip the subscribe-time send_work when STRATUM_NOTIFY_AFTER_AUTH is
+        # set; rpc_authorize will fire send_work after the full handshake
+        # completes — producing exactly ONE notify, matching krizis / ckpool.
+        if not NOTIFY_AFTER_AUTH:
+            reactor.callLater(0, self._send_work)
         en1_hex = self._extranonce1.encode('hex')
         en2_size = self.wb.COINBASE_NONCE_LENGTH - len(self._extranonce1)
         # Subscription IDs: short, session-correlated (en1 prefix + index),
