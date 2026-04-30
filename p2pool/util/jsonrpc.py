@@ -3,6 +3,7 @@ from __future__ import division
 import json
 import os
 import weakref
+from collections import OrderedDict
 
 from twisted.internet import defer
 from twisted.protocols import basic
@@ -29,8 +30,16 @@ if _LEGACY_JSONRPC:
 
 def _frame_response(id_, result, error):
     """Build the JSON for an outgoing JSON-RPC response, honouring the
-    STRATUM_LEGACY_JSONRPC toggle."""
-    obj = {'id': id_, 'result': result, 'error': error}
+    STRATUM_LEGACY_JSONRPC toggle.  Key order: id → result → error
+    (→ jsonrpc), matching krizis / ckpool layout exactly so a strict
+    hand-rolled CGMiner parser that expects a fixed field sequence
+    sees the same bytes.  PyPy/CPython 2.7 dict iteration is hash-based
+    and undeterministic — without OrderedDict we'd emit fields in
+    whatever order the dict happens to enumerate."""
+    obj = OrderedDict()
+    obj['id'] = id_
+    obj['result'] = result
+    obj['error'] = error
     if not _LEGACY_JSONRPC:
         obj['jsonrpc'] = '2.0'
     return json.dumps(obj)
@@ -61,7 +70,15 @@ def _frame_request(id_, method, params):
     id=null for any method on the known-notification list."""
     if method in _STRATUM_NOTIFICATION_METHODS:
         id_ = None
-    obj = {'method': method, 'params': params, 'id': id_}
+    # Key order: id → method → params (→ jsonrpc), matching krizis /
+    # ckpool / NiceHash exactly.  Strict hand-rolled CGMiner parsers
+    # in stock Bitmain firmware may have a fixed field sequence and
+    # bail on differently-ordered JSON; PyPy 2.7 dict iteration is
+    # hash-based, so without OrderedDict we'd emit unpredictable order.
+    obj = OrderedDict()
+    obj['id'] = id_
+    obj['method'] = method
+    obj['params'] = params
     if not _LEGACY_JSONRPC:
         obj['jsonrpc'] = '2.0'
     return json.dumps(obj)
