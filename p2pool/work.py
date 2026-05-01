@@ -500,15 +500,30 @@ class WorkerBridge(worker_interface.WorkerBridge):
                 target = min(target,
                     bitcoin_data.average_attempts_to_target(local_hash_rate / 10)) # target no more than 10 share responses every second node-wide by modulating min pseudoshare difficulty
             else:
-                # If we don't yet have an estimated node hashrate, then we still need to not undershoot the difficulty.
-                # Otherwise, we might get 1 PH/s of hashrate on difficulty settings appropriate for 1 GH/s.
-                # 1/3000000th the difficulty of a full share (1000x lower than the original 1/3000th) to ensure
-                # small nodes (GH/s-class miners) get frequent pseudoshares for hash rate estimation.
-                # The stratum adaptive difficulty adjusts per-miner after the first pseudoshare.
-                # With BCH network diff ~8e11, this gives initial pseudoshare diff ~265 per miner,
-                # appropriate for Bitaxe-class miners at 400-650 GH/s with share_rate=3.0 sec/share.
+                # Cold-start fallback when we don't yet have a local hash-rate
+                # estimate.  Multiplier value: SMALLER = harder target = higher
+                # initial difficulty.  Two regimes:
+                #   3000  (kr1z1s / upstream default): initial diff ~265,000,
+                #         appropriate for industrial ASICs (S21+ at 235 TH/s
+                #         finds a share in ~5 s).  Strict firmware (Antminer
+                #         FR-1.15 stock) requires this regime — it does not
+                #         track set_difficulty changes fast enough to ride a
+                #         vardiff ratchet up from a too-easy initial target.
+                #   3000000 (legacy default): initial diff ~265, appropriate
+                #         for Bitaxe-class hardware (400-650 GH/s) so they
+                #         get frequent pseudoshares for hash-rate estimation.
+                # Env-configurable.  Default 3000 (industrial) — fits the
+                # vast majority of production deployments and is what kr1z1s
+                # ships.  Set STRATUM_INITIAL_TARGET_MULT=3000000 to opt back
+                # into Bitaxe-friendly behaviour.
+                import os as _os_for_initial_mult
+                try:
+                    _initial_target_mult = int(_os_for_initial_mult.environ.get(
+                        'STRATUM_INITIAL_TARGET_MULT', '3000'))
+                except ValueError:
+                    _initial_target_mult = 3000
                 block_subsidy = self.node.bitcoind_work.value['subsidy']
-                target = min(target, 3000000 * bitcoin_data.average_attempts_to_target((bitcoin_data.target_to_average_attempts(
+                target = min(target, _initial_target_mult * bitcoin_data.average_attempts_to_target((bitcoin_data.target_to_average_attempts(
                     self.node.bitcoind_work.value['bits'].target)*self.node.net.SPREAD)*self.node.net.PARENT.DUST_THRESHOLD/block_subsidy))
         else:
             target = desired_pseudoshare_target
