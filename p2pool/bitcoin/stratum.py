@@ -442,7 +442,17 @@ class StratumRPCMiningProvider(object):
             if self.target > floor_target:
                 self.target = floor_target
             self.target = max(x['min_share_target'], self.target)
-        jobid = str(random.randrange(2**128))
+        # Stratum jobid: 2**32 range (max 10 decimal digits) matches kr1z1s
+        # and upstream p2pool conventions.  Strict CGMiner-derived parsers in
+        # stock Bitmain firmware (Antminer S21+ FR-1.15 confirmed) have
+        # fixed-size buffers for the jobid string and silently drop notify
+        # messages with longer ids.  Our previous range 2**128 produced
+        # 39-char decimal strings which overflowed those buffers — miners
+        # accepted the connection but never submitted shares because they
+        # couldn't echo the jobid back in mining.submit.  2**32 = 4 billion
+        # unique ids gives essentially zero collision risk within the
+        # handler_map's lifetime (300s expiry).
+        jobid = str(random.randrange(2**32))
         new_diff = bitcoin_data.target_to_difficulty(self.target)*self.wb.net.DUMB_SCRYPT_DIFF
         self._trace('-->', 'set_difficulty', diff='%.4g' % new_diff)
         self.other.svc_mining.rpc_set_difficulty(new_diff).addErrback(lambda err: None)
