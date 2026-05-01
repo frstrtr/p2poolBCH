@@ -87,7 +87,7 @@ class Protocol(p2protocol.Protocol):
                 # the journal on every inv message.
                 if inv['type'] not in self._logged_unknown_inv_types:
                     self._logged_unknown_inv_types.add(inv['type'])
-                    print 'Unknown inv type %r — ignoring (will not log again for this code)' % (inv['type'],)
+                    print 'Unknown inv type %r - ignoring (will not log again for this code)' % (inv['type'],)
 
     message_getdata = pack.ComposedType([
         ('requests', pack.ListType(pack.ComposedType([

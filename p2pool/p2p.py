@@ -714,9 +714,9 @@ class Node(object):
 
     def forgive_transgressions(self):
         for host in self.banscores:
-            self.banscore[host] -= 1
-            if self.banscore[host] < 0:
-                self.banscore[host] = 0
+            self.banscores[host] -= 1
+            if self.banscores[host] < 0:
+                self.banscores[host] = 0
     
     def _think(self):
         try:

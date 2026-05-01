@@ -376,7 +376,7 @@ def main(args, net, datadir_path, merged_urls, worker_endpoint):
                 _bot_module = 'telegram_bot_mtproto.bot'
                 _bot_label = 'MTProto (Telethon)'
             else:
-                print 'Warning: unknown --bot-impl %r — defaulting to PTB' % (_bot_impl,)
+                print 'Warning: unknown --bot-impl %r - defaulting to PTB' % (_bot_impl,)
                 _bot_module = 'telegram_bot.bot'
                 _bot_label = 'PTB / Bot API'
             _p2pool_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
