@@ -29,7 +29,7 @@ Usage
 -----
     python3 asic_simulator.py [--target HOST:PORT ...] [options]
 
-    Defaults: targets = both p2p-spb.xyz:9338 (krizis) and
+    Defaults: targets = both p2p-spb.xyz:9338 (kr1z1s) and
     109.161.52.148:9348 (ours).  Run for 60 s, log everything.
 
     --target HOST:PORT     repeatable; targets to connect to
@@ -40,7 +40,7 @@ Usage
     --submit-fake-share    after first notify, send a synthetic share with
                            extranonce2='deadbeef' / nonce='cafef00d' / ntime=0;
                            pool will reject — we read the error.  Only run
-                           against your OWN pools (we don't want krizis bans).
+                           against your OWN pools (we don't want kr1z1s bans).
     --capture FILE         tee everything to this file (line-buffered)
     --no-color             disable terminal colour codes
 
@@ -173,7 +173,7 @@ async def main():
     p = argparse.ArgumentParser(
         description="fake Antminer S21+ FR-1.15 stratum client for pool A/B testing")
     p.add_argument("--target", action="append", default=None,
-                   help="HOST:PORT — repeatable.  Default: both krizis (p2p-spb.xyz:9338) and ours (109.161.52.148:9348).")
+                   help="HOST:PORT — repeatable.  Default: both kr1z1s (p2p-spb.xyz:9338) and ours (109.161.52.148:9348).")
     p.add_argument("--duration", type=float, default=60.0,
                    help="seconds to keep connections open (default 60)")
     p.add_argument("--ua", default="Antminer S21+/Tue Apr 22 15:05:57 CST 2025",
@@ -189,7 +189,7 @@ async def main():
     args = p.parse_args()
 
     targets = args.target or [
-        "p2p-spb.xyz:9338",       # krizis (works for FR-1.15)
+        "p2p-spb.xyz:9338",       # kr1z1s (works for FR-1.15)
         "109.161.52.148:9348",    # ours (cycling)
     ]
 

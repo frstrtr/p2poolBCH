@@ -17,8 +17,8 @@ from p2pool.util import deferral, deferred_resource, memoize
 # responses and request frames.  Strict CGMiner branches in some Bitmain
 # stock firmware (Antminer S21+ FR-1.15 observed) parse only the legacy
 # 1.0 layout and silently fail on the 2.0 marker — they handshake but
-# never submit shares.  Krizis (p2p-spb.xyz, version 77.0.0-12-g5493200)
-# wire-traces show no "jsonrpc" field, and krizis is observed handling
+# never submit shares.  Kr1z1s (p2p-spb.xyz, version 77.0.0-12-g5493200)
+# wire-traces show no "jsonrpc" field, and kr1z1s is observed handling
 # FR-1.15 fine.  Default off = legacy (current) 2.0 behaviour.  Affects
 # all jsonrpc.py callers (LineBasedPeer for stratum + HTTPServer for the
 # legacy /getwork endpoint); BCHN's bitcoind RPC client does not go
@@ -31,7 +31,7 @@ if _LEGACY_JSONRPC:
 def _frame_response(id_, result, error):
     """Build the JSON for an outgoing JSON-RPC response, honouring the
     STRATUM_LEGACY_JSONRPC toggle.  Key order: id → result → error
-    (→ jsonrpc), matching krizis / ckpool layout exactly so a strict
+    (→ jsonrpc), matching kr1z1s / ckpool layout exactly so a strict
     hand-rolled CGMiner parser that expects a fixed field sequence
     sees the same bytes.  PyPy/CPython 2.7 dict iteration is hash-based
     and undeterministic — without OrderedDict we'd emit fields in
@@ -60,7 +60,7 @@ def _frame_request(id_, method, params):
     Stratum has both true RPC requests (e.g. client.get_version, where the
     miner sends a response) and unsolicited notifications (mining.notify,
     mining.set_difficulty, mining.set_version_mask, etc.).  The JSON-RPC
-    spec says notifications MUST have id=null; krizis / ckpool / slush /
+    spec says notifications MUST have id=null; kr1z1s / ckpool / slush /
     NiceHash all do this.  The p2pool framework's GenericDeferrer assigns
     a sequential id to every outgoing call uniformly, which produces
     non-null ids for notifications too — strict CGMiner-derived parsers
@@ -70,7 +70,7 @@ def _frame_request(id_, method, params):
     id=null for any method on the known-notification list."""
     if method in _STRATUM_NOTIFICATION_METHODS:
         id_ = None
-    # Key order: id → method → params (→ jsonrpc), matching krizis /
+    # Key order: id → method → params (→ jsonrpc), matching kr1z1s /
     # ckpool / NiceHash exactly.  Strict hand-rolled CGMiner parsers
     # in stock Bitmain firmware may have a fixed field sequence and
     # bail on differently-ordered JSON; PyPy 2.7 dict iteration is

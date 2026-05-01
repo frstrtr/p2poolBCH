@@ -372,7 +372,7 @@ class WorkerBridge(worker_interface.WorkerBridge):
             # scriptSig (fabe6d6d magic + zero aux merkle root + dummy
             # chain config) when STRATUM_FAKE_AUXMM=1.  This produces a
             # 44-byte scriptSig payload byte-identical-shape to what
-            # krizis (p2p-spb.xyz, real merged-mining BCH+aux) sends.
+            # kr1z1s (p2p-spb.xyz, real merged-mining BCH+aux) sends.
             # Strict CGMiner branches in stock Bitmain firmware (Antminer
             # S21+ FR-1.15 suspected) inspect the coinbase for the merged-
             # mining marker as a "real production pool" sanity check;

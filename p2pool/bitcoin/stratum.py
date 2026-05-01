@@ -71,7 +71,7 @@ MIN_INITIAL_DIFF     = _envfloat('STRATUM_MIN_INITIAL_DIFF', 0.0)
 # firmware (observed: Antminer S21+ stock FR-1.15) silently chokes on
 # the empty extranonce1 and never submits shares — this is the most
 # likely root cause of the 145 s 0-submit clean-FIN cycle and matches
-# the behaviour seen on krizis (p2p-spb.xyz, version 77.0.0-12-g5493200)
+# the behaviour seen on kr1z1s (p2p-spb.xyz, version 77.0.0-12-g5493200)
 # which assigns a 1-byte extranonce1 ("fa") and en2_size=3 and is
 # observed handling FR-1.15 fine.  Set this to 1 (or higher) to match
 # ckpool / slush / NiceHash convention; extranonce2_size shrinks by the
@@ -85,7 +85,7 @@ EXTRANONCE1_LEN      = int(_envfloat('STRATUM_EXTRANONCE1_LEN', 0))
 # completes, instead of also firing one immediately after mining.subscribe.
 # Legacy behaviour: rpc_subscribe schedules a _send_work, then rpc_authorize
 # also schedules one — producing TWO consecutive clean=true notifies within
-# ~250 ms of each other.  Krizis (and ckpool / NiceHash / slush) send ONE
+# ~250 ms of each other.  Kr1z1s (and ckpool / NiceHash / slush) send ONE
 # notify after the full handshake.  Strict CGMiner branches in stock Bitmain
 # firmware (Antminer S21+ FR-1.15) may interpret two clean=true notifies
 # within sub-second as "the pool just had a transient reset" and lose trust
@@ -181,13 +181,13 @@ class StratumRPCMiningProvider(object):
                     form=('nested' if NICEHASH_COMPAT else 'flat'))
         # Skip the subscribe-time send_work when STRATUM_NOTIFY_AFTER_AUTH is
         # set; rpc_authorize will fire send_work after the full handshake
-        # completes — producing exactly ONE notify, matching krizis / ckpool.
+        # completes — producing exactly ONE notify, matching kr1z1s / ckpool.
         if not NOTIFY_AFTER_AUTH:
             reactor.callLater(0, self._send_work)
         en1_hex = self._extranonce1.encode('hex')
         en2_size = self.wb.COINBASE_NONCE_LENGTH - len(self._extranonce1)
         # Subscription IDs: short, session-correlated (en1 prefix + index),
-        # matching krizis's wire format which is observed handling Antminer
+        # matching kr1z1s's wire format which is observed handling Antminer
         # S21+ stock FR-1.15 fine.  Strict CGMiner-derived parsers in stock
         # firmware may have fixed-size buffers for the subscription-id
         # string and overflow on the legacy 32-char hex constants.  When no
@@ -197,7 +197,7 @@ class StratumRPCMiningProvider(object):
         setdiff_id  = id_prefix + '2'
         if NICEHASH_COMPAT:
             # Strict slush/NiceHash form: subscription_details is a LIST of
-            # (method, id) pairs.  The order matters: krizis (and ckpool /
+            # (method, id) pairs.  The order matters: kr1z1s (and ckpool /
             # NiceHash) puts mining.notify FIRST then mining.set_difficulty.
             # Stock CGMiner forks have been observed position-parsing this
             # array and breaking when the order is reversed.
