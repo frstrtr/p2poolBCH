@@ -241,8 +241,22 @@ aux_pow_coinbase_type = pack.ComposedType([
 ])
 
 def make_auxpow_tree(chain_ids):
+    # STRATUM_AUXPOW_MIN_SIZE forces a minimum aux merkle tree size.
+    # kr1z1s declares size=16 in its BCH coinbase even when only one
+    # aux chain is populated; FR-1.15 stock firmware appears to treat
+    # size=1 as "test/incomplete merged mining" and gravitates to the
+    # peer pool with size>=16 regardless of the operator's configured
+    # priority order.  Forcing size=16 makes our wire shape match.
+    # Consensus-safe: auxpow validators only check the leaf position
+    # for their own chain_id; padding leaves are zero-hashed and never
+    # collide because chain IDs hash deterministically.
+    import os as _os_for_min_size
+    try:
+        _min_size = int(_os_for_min_size.environ.get('STRATUM_AUXPOW_MIN_SIZE', '0'))
+    except ValueError:
+        _min_size = 0
     for size in (2**i for i in xrange(31)):
-        if size < len(chain_ids):
+        if size < len(chain_ids) or size < _min_size:
             continue
         res = {}
         for chain_id in chain_ids:
