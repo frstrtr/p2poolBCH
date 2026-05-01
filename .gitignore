@@ -13,4 +13,5 @@ Makefile.local
 build/
 ltc_scrypt.so
 remote-logs/
+external-logs/
 kr1z1s/

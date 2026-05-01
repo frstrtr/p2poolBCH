@@ -1152,7 +1152,18 @@ def get_web_root(wb, datadir_path, bitcoind_getinfo_var, stop_event=variable.Eve
     @node.bitcoind_work.changed.watch
     def _(new_work):
         hd.datastreams['getwork_latency'].add_datum(time.time(), new_work['latency'])
-    new_root.putChild('graph_data', WebInterface(lambda source, view: hd.datastreams[source].dataviews[view].get_data(time.time())))
+    def _graph_data(source, view):
+        ds = hd.datastreams.get(source)
+        if ds is None:
+            # The dashboard requests merged_current_payouts even on
+            # non-merged setups; missing streams should serve empty
+            # data instead of 500ing and spamming the log.
+            return []
+        dv = ds.dataviews.get(view)
+        if dv is None:
+            return []
+        return dv.get_data(time.time())
+    new_root.putChild('graph_data', WebInterface(_graph_data))
 
     # ==== Network difficulty history endpoint ====
     network_diff_history = []
