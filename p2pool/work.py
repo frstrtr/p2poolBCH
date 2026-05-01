@@ -444,6 +444,17 @@ class WorkerBridge(worker_interface.WorkerBridge):
                     )
         
         if True:
+            # STRATUM_COINBASE_RAW_SUFFIX appends raw bytes to the
+            # coinbase scriptSig WITHOUT a push-opcode prefix.  kr1z1s
+            # appends "p2p-spb.xyz" this way (11 raw bytes after the
+            # 44-byte fabe6d6d aux marker).  --coinbtext puts a push
+            # opcode in front, which is byte-different.  FR-1.15 stock
+            # firmware appears to inspect the trailing scriptSig bytes
+            # and may use printable-ASCII detection as a "real pool"
+            # heuristic — push-prefixed text fails that check.  The
+            # truncate-to-100 floor still applies (BIP34 scriptSig limit).
+            import os as _os_for_raw_suffix
+            _raw_suffix = _os_for_raw_suffix.environ.get('STRATUM_COINBASE_RAW_SUFFIX', '')
             share_info, gentx, other_transaction_hashes, get_share = share_type.generate_transaction(
                 tracker=self.node.tracker,
                 share_data=dict(
@@ -451,7 +462,7 @@ class WorkerBridge(worker_interface.WorkerBridge):
                     coinbase=(script.create_push_script([
                         self.current_work.value['height'],
                         ] + ([mm_data] if mm_data else []) + self.args.coinb_texts
-                    ) + self.current_work.value['coinbaseflags'])[:100],
+                    ) + self.current_work.value['coinbaseflags'] + _raw_suffix)[:100],
                     nonce=random.randrange(2**32),
                     address=address,
                     subsidy=self.current_work.value['subsidy'],
