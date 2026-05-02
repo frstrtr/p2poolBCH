@@ -557,8 +557,15 @@ class StratumRPCMiningProvider(object):
         )
         result = got_response(header, worker_name, coinb_nonce, self.target)
 
-        # adjust difficulty on this stratum to target ~10sec/pseudoshare
-        if not self.fixed_target:
+        # adjust difficulty on this stratum to target ~10sec/pseudoshare.
+        # Only ACCEPTED shares feed vardiff samples — rejected (hash > target)
+        # submissions would otherwise inflate the apparent share rate, ratchet
+        # diff up too aggressively, and worsen the next race.  Antminer S21+
+        # FR-1.15 stock under heavy version-rolling produces a steady stream
+        # of ~1.0-1.2x-target near-misses; counting those as samples sent the
+        # vardiff loop into a self-reinforcing oscillation observed in the
+        # 2026-05-02 retention regression (s21p2355 18:18-18:22 trace).
+        if not self.fixed_target and result:
             self.recent_shares.append(time.time())
             if len(self.recent_shares) > 12 or (time.time() - self.recent_shares[0]) > 10*len(self.recent_shares)*self.share_rate:
                 old_time = self.recent_shares[0]
