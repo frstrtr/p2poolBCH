@@ -18,24 +18,18 @@ import p2pool, p2pool.data as p2pool_data
 print_throttle = 0.0
 
 class WorkerBridge(worker_interface.WorkerBridge):
-    # Total coinbase nonce slot in bytes.  Default 8 bytes (1-byte
-    # extranonce1 + 7-byte extranonce2) gives 2^64 nonce search per
-    # session.  kr1z1s ships 4 bytes (1+3) — apparently because their
-    # CachingWorkerBridge halves it for getwork compatibility, and FR-1.15
-    # stock firmware appears to require the smaller slot.  Set
-    # STRATUM_NONCE_LENGTH=4 to match kr1z1s wire shape exactly: with
-    # STRATUM_EXTRANONCE1_LEN=1, extranonce2_size becomes 3.  Caveat:
-    # 4-byte slot exhausts in ~18ms at 235 TH/s, but version-rolling and
-    # ntime-rolling extend the search effectively, and kr1z1s has been
-    # running this way against Antminer S21+ at 235 TH/s for months.
-    import os as _os_for_nonce_len
-    try:
-        COINBASE_NONCE_LENGTH = int(_os_for_nonce_len.environ.get('STRATUM_NONCE_LENGTH', '8'))
-    except ValueError:
-        COINBASE_NONCE_LENGTH = 8
-    if COINBASE_NONCE_LENGTH not in (4, 8):
-        COINBASE_NONCE_LENGTH = 8
-    del _os_for_nonce_len
+    # COINBASE_NONCE_LENGTH MUST stay 8 here.  The Share class in data.py
+    # packs last_txout_nonce as IntType(64) (8 bytes); any smaller value
+    # makes Share.__init__'s gentx_hash reconstruction misalign and the
+    # PoW recheck raises 'share PoW invalid' — pool mines but generates
+    # zero share-chain entries.  To get a 4-byte slot on the wire (which
+    # Antminer S21+ FR-1.15 stock firmware requires), wrap the WorkerBridge
+    # with CachingWorkerBridge in main.py — that wrapper halves the slot
+    # for the wire while keeping the inner 8-byte slot for share-chain
+    # correctness.  STRATUM_NONCE_LENGTH was an env var experiment that
+    # broke share-chain validation — it is now ignored; the only correct
+    # path is the CachingWorkerBridge wrapper.
+    COINBASE_NONCE_LENGTH = 8
 
     def __init__(self, node, my_address, donation_percentage, merged_urls,
                  worker_fee, args, pubkeys, bitcoind, share_rate):

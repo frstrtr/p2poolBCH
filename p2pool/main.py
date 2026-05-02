@@ -401,23 +401,22 @@ def main(args, net, datadir_path, merged_urls, worker_endpoint):
         worker_interface.WorkerInterface(caching_wb).attach_to(web_root, get_handler=lambda request: request.redirect('/static/'))
         web_serverfactory = server.Site(web_root)
 
-        # Stratum is given the *inner* wb (full 8-byte COINBASE_NONCE_LENGTH),
-        # NOT the CachingWorkerBridge wrapper that halves it to 4 bytes.
-        # CachingWorkerBridge is a getwork-specific optimisation that reserves
-        # half of the coinbase nonce slot for its own _my_bits cycling — useful
-        # for HTTP getwork where many concurrent requests share a job, but in
-        # stratum each session has its own extranonce1 prefix
-        # (STRATUM_EXTRANONCE1_LEN) so the bridge's internal nonce-tracking
-        # is redundant.  By giving stratum the full 8-byte slot we let the
-        # miner own 7 bytes (with 1 reserved for xnonce1) — ~300 seconds of
-        # search space at 235 TH/s, matching kr1z1s (p2p-spb.xyz) exactly.
-        # With the legacy caching_wb path, stratum exposed only 3 bytes of
-        # extranonce2; a 235 TH/s ASIC exhausts that in ~18 ms — strict
-        # firmware (Antminer S21+ FR-1.15) refuses to mine on a pool
-        # advertising a too-small nonce slot.  Discovered by side-by-side
-        # source comparison with kr1z1s's stratum.py + work.py.  HTTP
-        # getwork (above) keeps its CachingWorkerBridge wrapper.
-        serverfactory = switchprotocol.FirstByteSwitchFactory({'{': stratum.StratumServerFactory(wb)}, web_serverfactory)
+        # Stratum uses the same CachingWorkerBridge wrapper as getwork.
+        # The wrapper halves COINBASE_NONCE_LENGTH (8→4): it appends 4 bytes
+        # of its own session-tracking nonce to coinb1 and prepends those
+        # same 4 bytes to the miner's submitted coinbase_nonce, so the
+        # *inner* wb still receives a full 8-byte coinbase_nonce.  This is
+        # critical for share-chain validity: Share.__init__ in data.py
+        # packs last_txout_nonce as IntType(64) (8 bytes), so any path
+        # that produces a smaller-than-8-byte coinbase_nonce makes the
+        # gentx_hash reconstruction misalign and Share's PoW recheck
+        # raises 'share PoW invalid' — pool mines but generates zero
+        # share-chain entries.  This matches kr1z1s's wire shape exactly
+        # (xnonce2_size=3) and keeps share-chain consensus correct.
+        # The earlier 'pass inner wb' approach (commit be8db89) advertised
+        # xnonce2_size=7 to miners, which Antminer S21+ FR-1.15 stock
+        # firmware refused to use.
+        serverfactory = switchprotocol.FirstByteSwitchFactory({'{': stratum.StratumServerFactory(caching_wb)}, web_serverfactory)
         deferral.retry('Error binding to worker port:', traceback=False)(reactor.listenTCP)(worker_endpoint[1], serverfactory, interface=worker_endpoint[0])
         
         with open(os.path.join(os.path.join(datadir_path, 'ready_flag')), 'wb') as f:
