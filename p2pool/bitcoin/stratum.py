@@ -109,16 +109,17 @@ NICEHASH_COMPAT      = _envflag('STRATUM_NICEHASH_COMPAT')
 TRACE                = _envflag('STRATUM_TRACE')
 # Vardiff per-ratchet clip factor.  The vardiff multiplier is computed as
 # (actual_interval / desired_interval) and then clamped to [1/F, F] before
-# being applied to self.target.  Default F=2.0 matches upstream kr1z1s
-# behaviour: any single ratchet can halve or double diff.  For industrial
-# miners with firmware-imposed submit-interval floors (Antminer FR-1.15
-# stock observed), the (0.5, 2.0) range can over-ratchet diff into a
-# regime the firmware can't keep up with, causing reject storms and
-# eventual silent disconnect.  Set STRATUM_VARDIFF_CLIP=1.5 for a tighter
-# (0.667, 1.5) range — slower convergence, but no single ratchet doubles
-# diff in one step.  Recommended in combination with --share-rate 1.5
-# to match kr1z1s steady-state diff ~80K at 235 TH/s.  Must be > 1.0.
-VARDIFF_CLIP         = max(1.001, _envfloat('STRATUM_VARDIFF_CLIP', 2.0))
+# being applied to self.target.  Default F=10.0 matches the LTC+DOGE
+# merged-mining fork (commit 1d66c752) which proved this in production:
+# wider per-ratchet bound reaches steady-state in a single step rather
+# than chasing it over many small adjustments.  The narrow (0.5, 2.0)
+# upstream default forces high-hashrate ASICs (Antminer S21+ class) to
+# spend dozens of ratchets converging on equilibrium diff, during which
+# every mismatch between pool ratchet and miner-side set_difficulty
+# adoption produces a reject — stock FR-1.15 firmware tolerates this
+# poorly and silently drops the connection.  One big jump beats many
+# small ones.  Override with STRATUM_VARDIFF_CLIP=<F>.  Must be > 1.0.
+VARDIFF_CLIP         = max(1.001, _envfloat('STRATUM_VARDIFF_CLIP', 10.0))
 if DISABLE_ASICBOOST:
     print 'STRATUM: ASICBoost (BIP310 version-rolling) DISABLED via STRATUM_DISABLE_ASICBOOST'
 if DISABLE_LATENCY_PING:
@@ -137,8 +138,10 @@ if EXTRANONCE1_LEN > 0:
     print 'STRATUM: server-assigned extranonce1 = %d byte(s) per session via STRATUM_EXTRANONCE1_LEN' % EXTRANONCE1_LEN
 if NOTIFY_AFTER_AUTH:
     print 'STRATUM: first work-push DEFERRED to post-authorize (no double-notify) via STRATUM_NOTIFY_AFTER_AUTH'
-if VARDIFF_CLIP != 2.0:
+if VARDIFF_CLIP != 10.0:
     print 'STRATUM: vardiff per-ratchet clip = (%.3f, %.3f) via STRATUM_VARDIFF_CLIP=%.3f' % (1.0/VARDIFF_CLIP, VARDIFF_CLIP, VARDIFF_CLIP)
+else:
+    print 'STRATUM: vardiff per-ratchet clip = (0.100, 10.000) (default; matches LTC+DOGE merged-v36)'
 
 def _ts():
     t = time.time()
