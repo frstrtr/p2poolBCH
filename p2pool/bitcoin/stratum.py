@@ -498,8 +498,16 @@ class StratumRPCMiningProvider(object):
             ntime_hex,
             True, # clean_jobs
         ).addErrback(lambda err: None)
-        self.handler_map[jobid] = x, got_response
-    
+        # Capture the target THAT WAS CURRENT WHEN THIS NOTIFY WENT OUT, so
+        # that any submit referencing this jobid is validated against the
+        # target the miner was told to mine against — NOT the (possibly
+        # ratcheted-since) self.target.  Without this, a vardiff ratchet
+        # between notify-issue and submit-arrive causes the miner's in-flight
+        # work to fail "hash > target" validation even though it meets the
+        # diff we explicitly set_difficulty'd to (live evidence: 2026-05-02
+        # 18:18-18:22 trace, ~50% reject rate on s21p2355).
+        self.handler_map[jobid] = x, got_response, self.target
+
     def rpc_submit(self, worker_name, job_id, extranonce2, ntime, nonce, version_bits = None, *args):
         #asicboost: version_bits is the version mask that the miner used
         self._trace('<--', 'submit', worker=worker_name, jobid=job_id,
@@ -514,7 +522,7 @@ class StratumRPCMiningProvider(object):
             print >>sys.stderr, '''Couldn't link returned work's job id with its handler. This should only happen if this process was recently restarted!'''
             #self.other.svc_client.rpc_reconnect().addErrback(lambda err: None)
             return False
-        x, got_response = self.handler_map[job_id]
+        x, got_response, job_target = self.handler_map[job_id]
         # Full coinbase nonce = our session's extranonce1 (server-assigned
         # prefix, possibly empty) + the miner's submitted extranonce2.
         # The combined length must still equal COINBASE_NONCE_LENGTH so
@@ -555,7 +563,10 @@ class StratumRPCMiningProvider(object):
             bits=x['bits'],
             nonce=nonce_int,
         )
-        result = got_response(header, worker_name, coinb_nonce, self.target)
+        # Validate against job_target (target at notify-issue time), NOT
+        # self.target (which may have ratcheted since).  Eliminates the
+        # vardiff race documented above the handler_map assignment.
+        result = got_response(header, worker_name, coinb_nonce, job_target)
 
         # adjust difficulty on this stratum to target ~10sec/pseudoshare.
         # Only ACCEPTED shares feed vardiff samples — rejected (hash > target)
