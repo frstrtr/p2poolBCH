@@ -107,6 +107,18 @@ NICEHASH_COMPAT      = _envflag('STRATUM_NICEHASH_COMPAT')
 # leading up to a disconnect from journald.  Verbose — leave off in
 # steady state; flip on right before reproducing a disconnect.
 TRACE                = _envflag('STRATUM_TRACE')
+# Vardiff per-ratchet clip factor.  The vardiff multiplier is computed as
+# (actual_interval / desired_interval) and then clamped to [1/F, F] before
+# being applied to self.target.  Default F=2.0 matches upstream kr1z1s
+# behaviour: any single ratchet can halve or double diff.  For industrial
+# miners with firmware-imposed submit-interval floors (Antminer FR-1.15
+# stock observed), the (0.5, 2.0) range can over-ratchet diff into a
+# regime the firmware can't keep up with, causing reject storms and
+# eventual silent disconnect.  Set STRATUM_VARDIFF_CLIP=1.5 for a tighter
+# (0.667, 1.5) range — slower convergence, but no single ratchet doubles
+# diff in one step.  Recommended in combination with --share-rate 1.5
+# to match kr1z1s steady-state diff ~80K at 235 TH/s.  Must be > 1.0.
+VARDIFF_CLIP         = max(1.001, _envfloat('STRATUM_VARDIFF_CLIP', 2.0))
 if DISABLE_ASICBOOST:
     print 'STRATUM: ASICBoost (BIP310 version-rolling) DISABLED via STRATUM_DISABLE_ASICBOOST'
 if DISABLE_LATENCY_PING:
@@ -125,6 +137,8 @@ if EXTRANONCE1_LEN > 0:
     print 'STRATUM: server-assigned extranonce1 = %d byte(s) per session via STRATUM_EXTRANONCE1_LEN' % EXTRANONCE1_LEN
 if NOTIFY_AFTER_AUTH:
     print 'STRATUM: first work-push DEFERRED to post-authorize (no double-notify) via STRATUM_NOTIFY_AFTER_AUTH'
+if VARDIFF_CLIP != 2.0:
+    print 'STRATUM: vardiff per-ratchet clip = (%.3f, %.3f) via STRATUM_VARDIFF_CLIP=%.3f' % (1.0/VARDIFF_CLIP, VARDIFF_CLIP, VARDIFF_CLIP)
 
 def _ts():
     t = time.time()
@@ -547,7 +561,7 @@ class StratumRPCMiningProvider(object):
                 old_time = self.recent_shares[0]
                 del self.recent_shares[0]
                 olddiff = bitcoin_data.target_to_difficulty(self.target)
-                self.target = int(self.target * clip((time.time() - old_time)/(len(self.recent_shares)*self.share_rate), 0.5, 2.) + 0.5)
+                self.target = int(self.target * clip((time.time() - old_time)/(len(self.recent_shares)*self.share_rate), 1.0/VARDIFF_CLIP, VARDIFF_CLIP) + 0.5)
                 newtarget = clip(self.target, self.wb.net.SANE_TARGET_RANGE[0], self.wb.net.SANE_TARGET_RANGE[1])
                 if newtarget != self.target:
                     print "Clipping target from %064x to %064x" % (self.target, newtarget)
