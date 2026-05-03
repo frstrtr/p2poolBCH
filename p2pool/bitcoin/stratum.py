@@ -46,6 +46,24 @@ DISABLE_IDLE_NUDGE   = _envflag('STRATUM_DISABLE_IDLE_NUDGE')
 # only if a strict-firmware miner is connecting + handshake-completing
 # but never submitting, AND raising STRATUM_MIN_INITIAL_DIFF didn't help.
 NOTIFY_HEX_LE        = _envflag('STRATUM_NOTIFY_HEX_LE')
+# Diff escalation experiment: when set to N seconds (>0) and no submits
+# have arrived from a session within N seconds of the last work send,
+# automatically double the effective diff and re-push work.  Continues
+# doubling every N seconds until either (a) the first submit arrives
+# (vardiff takes over), (b) the connection drops, or (c) the diff hits
+# RATCHET_MAX (default 2^24 = 16,777,216).
+#
+# Use case: experimentally probe the FR-1.15 firmware threshold by
+# climbing power-of-2 diff values within a single warm-backup session.
+# Pre-condition: STRATUM_FIXED_INITIAL_DIFF must be set (gives us a
+# defined starting value); the ratchet multiplies that base by 2**N
+# per step.
+#
+# Recommended values: NO_SUBMIT_RATCHET_SECONDS=20 (4-5 escalations
+# during a typical 90-sec warm-backup session, sweep 65k→1M).
+# Default 0 = off.
+NO_SUBMIT_RATCHET_SECONDS = _envfloat('STRATUM_NO_SUBMIT_RATCHET_SECONDS', 0.0)
+NO_SUBMIT_RATCHET_MAX     = int(_envfloat('STRATUM_NO_SUBMIT_RATCHET_MAX', 16777216))
 # Forced initial pseudoshare difficulty (in stratum diff units).  When
 # set to a positive value, _send_work clamps the per-session vardiff
 # state to EXACTLY this value on the first notify, ignoring the
@@ -151,6 +169,8 @@ if MIN_INITIAL_DIFF > 0:
     print 'STRATUM: minimum pseudoshare-difficulty floor = %g via STRATUM_MIN_INITIAL_DIFF' % MIN_INITIAL_DIFF
 if FIXED_INITIAL_DIFF > 0:
     print 'STRATUM: FORCED initial pseudoshare difficulty = %g via STRATUM_FIXED_INITIAL_DIFF (overrides natural calc)' % FIXED_INITIAL_DIFF
+if NO_SUBMIT_RATCHET_SECONDS > 0:
+    print 'STRATUM: no-submit DIFF RATCHET = double every %.1fs (cap %d) via STRATUM_NO_SUBMIT_RATCHET_SECONDS' % (NO_SUBMIT_RATCHET_SECONDS, NO_SUBMIT_RATCHET_MAX)
 if NOTIFY_HEX_LE:
     print 'STRATUM: mining.notify version/nbits/ntime hex sent as LITTLE-ENDIAN via STRATUM_NOTIFY_HEX_LE'
 if EXTRANONCE1_LEN > 0:
@@ -202,6 +222,12 @@ class StratumRPCMiningProvider(object):
         # diff actually changed, and pause briefly before the notify so
         # the miner has time to process the new diff before the new job.
         self._last_sent_diff = None
+        # No-submit diff-ratchet state (env-gated via
+        # STRATUM_NO_SUBMIT_RATCHET_SECONDS).  Each step doubles the
+        # effective diff vs FIXED_INITIAL_DIFF; cancels on first submit
+        # or connection close.
+        self._ratchet_steps = 0
+        self._ratchet_timer = None
         # Throttle the "deferred work send" warning during long startup
         # phases (peers connecting / sharechain download / bitcoind down)
         # so we log at most once per _DEFERRED_WORK_LOG_INTERVAL.
@@ -492,8 +518,11 @@ class StratumRPCMiningProvider(object):
         # ratchet normally from there.  Skipped for fixed_target users
         # (operator opted into a manual diff via the worker name suffix).
         if FIXED_INITIAL_DIFF > 0 and not self.fixed_target and len(self.recent_shares) == 0:
+            # Apply ratchet multiplier (2^steps).  Steps reset to 0 on each
+            # connection (per-session state) and increment via _ratchet_diff.
+            effective_diff = FIXED_INITIAL_DIFF * (2 ** self._ratchet_steps)
             forced_target = bitcoin_data.difficulty_to_target(
-                FIXED_INITIAL_DIFF / self.wb.net.DUMB_SCRYPT_DIFF)
+                effective_diff / self.wb.net.DUMB_SCRYPT_DIFF)
             self.target = max(x['min_share_target'], forced_target)
         # Apply STRATUM_MIN_INITIAL_DIFF floor (env-gated, default off).
         # Smaller target = harder = higher stratum diff; we clamp self.target
@@ -561,11 +590,41 @@ class StratumRPCMiningProvider(object):
         # diff we explicitly set_difficulty'd to (live evidence: 2026-05-02
         # 18:18-18:22 trace, ~50% reject rate on s21p2355).
         self.handler_map[jobid] = x, got_response, self.target, time.time()
+        # Schedule diff-ratchet timer: if no submits arrive within
+        # NO_SUBMIT_RATCHET_SECONDS, double the effective FIXED_INITIAL_DIFF
+        # and re-emit work.  Only schedules if no timer is already pending
+        # (so share-chain advances don't keep resetting the window).
+        # Cancelled on first submit / connection close.
+        if (NO_SUBMIT_RATCHET_SECONDS > 0 and FIXED_INITIAL_DIFF > 0
+                and not self.fixed_target and len(self.recent_shares) == 0):
+            if self._ratchet_timer is None or not self._ratchet_timer.active():
+                self._ratchet_timer = reactor.callLater(
+                    NO_SUBMIT_RATCHET_SECONDS, self._ratchet_diff)
+
+    def _ratchet_diff(self):
+        # Fired by the no-submit timer.  Doubles the effective diff (one
+        # power-of-2 step) and triggers a fresh _send_work so the miner
+        # sees the new value.  Stops escalating once the cap is reached.
+        if len(self.recent_shares) > 0:
+            return  # safety: vardiff already started, leave alone
+        next_diff = FIXED_INITIAL_DIFF * (2 ** (self._ratchet_steps + 1))
+        if next_diff > NO_SUBMIT_RATCHET_MAX:
+            return  # ceiling reached
+        self._ratchet_steps += 1
+        try:
+            self._send_work()
+        except Exception:
+            log.err(None, 'ratchet _send_work failed:')
 
     def rpc_submit(self, worker_name, job_id, extranonce2, ntime, nonce, version_bits = None, *args):
         #asicboost: version_bits is the version mask that the miner used
         self._trace('<--', 'submit', worker=worker_name, jobid=job_id,
                     nonce=nonce, vmask=(version_bits or '-'))
+        # First submit attempt cancels the no-submit ratchet — vardiff
+        # will take over from here regardless of accept/reject result.
+        if self._ratchet_timer is not None and self._ratchet_timer.active():
+            self._ratchet_timer.cancel()
+            self._ratchet_timer = None
         worker_name = worker_name.strip()
         # Track every submit attempt (regardless of accept/reject) for diagnostics
         worker_info = self.wb.connected_workers.get(worker_name)
@@ -686,6 +745,9 @@ class StratumRPCMiningProvider(object):
         if self._ping_call is not None and self._ping_call.active():
             self._ping_call.cancel()
             self._ping_call = None
+        if self._ratchet_timer is not None and self._ratchet_timer.active():
+            self._ratchet_timer.cancel()
+            self._ratchet_timer = None
         self.wb.new_work_event.unwatch(self.watch_id)
 
 class StratumProtocol(jsonrpc.LineBasedPeer):
