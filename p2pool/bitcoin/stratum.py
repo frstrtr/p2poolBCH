@@ -70,6 +70,15 @@ NOTIFY_HEX_LE        = _envflag('STRATUM_NOTIFY_HEX_LE')
 # Default 0 = off.
 NO_SUBMIT_RATCHET_SECONDS = _envfloat('STRATUM_NO_SUBMIT_RATCHET_SECONDS', 0.0)
 NO_SUBMIT_RATCHET_MAX     = int(_envfloat('STRATUM_NO_SUBMIT_RATCHET_MAX', 16777216))
+# Alternative ratchet mode: ratchet on every NOTIFY (every new job)
+# instead of on a fixed time interval.  Per kr1z1s operator guidance:
+# "I used to have the difficulty set to two in various powers, such as
+# 8, 9, 10, 11" — i.e., each new job/notify advances to the next
+# power-of-2 diff.  When STRATUM_RATCHET_PER_NOTIFY=1 is set, the
+# step increments after every _send_work call (one per notify) until
+# the first submit OR the cap.  Coexists with seconds-based ratchet:
+# whichever fires first applies.  Default off.
+RATCHET_PER_NOTIFY        = _envflag('STRATUM_RATCHET_PER_NOTIFY')
 # Forced initial pseudoshare difficulty (in stratum diff units).  When
 # set to a positive value, _send_work clamps the per-session vardiff
 # state to EXACTLY this value on the first notify, ignoring the
@@ -177,6 +186,8 @@ if FIXED_INITIAL_DIFF > 0:
     print 'STRATUM: FORCED initial pseudoshare difficulty = %g via STRATUM_FIXED_INITIAL_DIFF (overrides natural calc)' % FIXED_INITIAL_DIFF
 if NO_SUBMIT_RATCHET_SECONDS > 0:
     print 'STRATUM: no-submit DIFF RATCHET = x%.3g every %.1fs (cap %d) via STRATUM_NO_SUBMIT_RATCHET_SECONDS' % (VARDIFF_CLIP, NO_SUBMIT_RATCHET_SECONDS, NO_SUBMIT_RATCHET_MAX)
+if RATCHET_PER_NOTIFY:
+    print 'STRATUM: per-notify DIFF RATCHET = x%.3g every new job (cap %d) via STRATUM_RATCHET_PER_NOTIFY' % (VARDIFF_CLIP, NO_SUBMIT_RATCHET_MAX)
 if NOTIFY_HEX_LE:
     print 'STRATUM: mining.notify version/nbits/ntime hex sent as LITTLE-ENDIAN via STRATUM_NOTIFY_HEX_LE'
 if EXTRANONCE1_LEN > 0:
@@ -609,6 +620,16 @@ class StratumRPCMiningProvider(object):
             if self._ratchet_timer is None or not self._ratchet_timer.active():
                 self._ratchet_timer = reactor.callLater(
                     NO_SUBMIT_RATCHET_SECONDS, self._ratchet_diff)
+
+        # Per-notify ratchet: each new job advances the diff one step.
+        # Per kr1z1s operator practice — increment after this notify so
+        # the NEXT notify uses the higher diff.  Stops at the cap.
+        # Coexists with the seconds-based timer (whichever is enabled).
+        if (RATCHET_PER_NOTIFY and FIXED_INITIAL_DIFF > 0
+                and not self.fixed_target and len(self.recent_shares) == 0):
+            next_diff = FIXED_INITIAL_DIFF * (VARDIFF_CLIP ** (self._ratchet_steps + 1))
+            if next_diff <= NO_SUBMIT_RATCHET_MAX:
+                self._ratchet_steps += 1
 
     def _ratchet_diff(self):
         # Fired by the no-submit timer.  Multiplies the effective diff by
