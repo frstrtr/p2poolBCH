@@ -506,7 +506,7 @@ class StratumRPCMiningProvider(object):
         # work to fail "hash > target" validation even though it meets the
         # diff we explicitly set_difficulty'd to (live evidence: 2026-05-02
         # 18:18-18:22 trace, ~50% reject rate on s21p2355).
-        self.handler_map[jobid] = x, got_response, self.target
+        self.handler_map[jobid] = x, got_response, self.target, time.time()
 
     def rpc_submit(self, worker_name, job_id, extranonce2, ntime, nonce, version_bits = None, *args):
         #asicboost: version_bits is the version mask that the miner used
@@ -522,7 +522,7 @@ class StratumRPCMiningProvider(object):
             print >>sys.stderr, '''Couldn't link returned work's job id with its handler. This should only happen if this process was recently restarted!'''
             #self.other.svc_client.rpc_reconnect().addErrback(lambda err: None)
             return False
-        x, got_response, job_target = self.handler_map[job_id]
+        x, got_response, job_target, job_issue_time = self.handler_map[job_id]
         # Full coinbase nonce = our session's extranonce1 (server-assigned
         # prefix, possibly empty) + the miner's submitted extranonce2.
         # The combined length must still equal COINBASE_NONCE_LENGTH so
@@ -567,6 +567,32 @@ class StratumRPCMiningProvider(object):
         # self.target (which may have ratcheted since).  Eliminates the
         # vardiff race documented above the handler_map assignment.
         result = got_response(header, worker_name, coinb_nonce, job_target)
+        # work.py returns (on_time, accepted) tuple; old fallback path
+        # accepts a bare bool from any legacy caller path.
+        if isinstance(result, tuple):
+            on_time, accepted = result
+        else:
+            on_time, accepted = result, result
+
+        # Structured REJECT trace — fires only on hash>target rejects (and
+        # only when STRATUM_TRACE=1).  Captures the missing diagnostic
+        # context that the existing 'hash > target' print lines don't have:
+        # jobid (correlate to specific notify), age since notify (catch
+        # stale-jobid edge cases), vmask (catch FR-1.15 version-rolling
+        # collisions), and target_drift (did vardiff ratchet between notify
+        # and submit even though we capture-at-notify).  Always-on summary
+        # line stays in work.py so users without TRACE still see rejects.
+        if not accepted:
+            age_ms = int((time.time() - job_issue_time) * 1000)
+            if self.target == job_target:
+                drift = 'same'
+            elif self.target < job_target:
+                drift = 'tighter %.3fx' % (float(job_target) / float(self.target))
+            else:
+                drift = 'looser %.3fx' % (float(self.target) / float(job_target))
+            self._trace('==', 'REJECT', worker=worker_name, jobid=job_id,
+                        age='%dms' % age_ms, vmask=(version_bits or '-'),
+                        drift=drift, on_time=on_time)
 
         # adjust difficulty on this stratum to target ~10sec/pseudoshare.
         # Only ACCEPTED shares feed vardiff samples — rejected (hash > target)
@@ -576,7 +602,7 @@ class StratumRPCMiningProvider(object):
         # of ~1.0-1.2x-target near-misses; counting those as samples sent the
         # vardiff loop into a self-reinforcing oscillation observed in the
         # 2026-05-02 retention regression (s21p2355 18:18-18:22 trace).
-        if not self.fixed_target and result:
+        if not self.fixed_target and accepted:
             self.recent_shares.append(time.time())
             if len(self.recent_shares) > 12 or (time.time() - self.recent_shares[0]) > 10*len(self.recent_shares)*self.share_rate:
                 old_time = self.recent_shares[0]
@@ -591,7 +617,14 @@ class StratumRPCMiningProvider(object):
                 self.recent_shares = [time.time()]
                 self._send_work()
 
-        return result
+        # Return accepted (not on_time) to the JSON-RPC client.  Stratum
+        # mining.submit response of False = miner counts the share as
+        # rejected.  Pre-fix code returned on_time, which sent False to the
+        # miner whenever the share was DOA — even though we credited the
+        # share internally.  FR-1.15 stock counts those as rejects and
+        # demotes our pool ranking; this fix removes that perceived-reject
+        # tax entirely.
+        return accepted
 
     
     def close(self):

@@ -699,7 +699,13 @@ class WorkerBridge(worker_interface.WorkerBridge):
                 except:
                     log.err(None, 'Error firing share_found event:')
 
+            accepted = False
             if pow_hash > pseudoshare_target:
+                miss_ratio = float(pow_hash) / float(pseudoshare_target) if pseudoshare_target > 0 else float('inf')
+                age_ms = int((time.time() - getwork_time) * 1000)
+                print 'REJECT %s miss=%.3fx age=%dms ver=0x%08x%s' % (
+                    username, miss_ratio, age_ms, header['version'],
+                    ' DOA' if not on_time else '')
                 print 'Worker %s submitted share with hash > target:' % (username,)
                 print '    Hash:   %064x' % (pow_hash,)
                 print '    Target: %064x' % (pseudoshare_target,)
@@ -710,6 +716,7 @@ class WorkerBridge(worker_interface.WorkerBridge):
             elif header_hash in received_header_hashes:
                 print >>sys.stderr, 'Worker %s submitted share more than once!' % (username,)
             else:
+                accepted = True
                 received_header_hashes.add(header_hash)
                 if username not in self.worker_shares:
                     self.worker_shares[username] = {'accepted': 0, 'rejected': 0}
@@ -733,7 +740,11 @@ class WorkerBridge(worker_interface.WorkerBridge):
             t1 = time.time()
             if p2pool.BENCH and (t1-t0) > .01: print "%8.3f ms for work.py:got_response(%s)" % ((t1-t0)*1000., username)
 
-            return on_time
+            # Return tuple so stratum.py can distinguish "DOA but accepted" from
+            # "rejected".  Old return was just on_time, which made stratum echo
+            # False to the miner for any DOA share — FR-1.15 stock counts that
+            # as a reject and demotes our pool, even though we credit the share.
+            return on_time, accepted
         t1 = time.time()
         if p2pool.BENCH: print "%8.3f ms for work.py:get_work(%s, %s)" % ((t1-t0)*1000., user, address)
         return ba, got_response
