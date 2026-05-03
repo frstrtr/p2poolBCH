@@ -82,7 +82,9 @@ class StratumSim:
         line = "[%s] [%s] %s %s" % (now_ts(), label, direction, msg)
         if color and not self.args.no_color:
             line = C(color, line)
-        print(line, flush=True)
+        # --quiet-wire suppresses per-line stdout but keeps capture file complete
+        if not self.args.quiet_wire:
+            print(line, flush=True)
         if self.capture_fh:
             self.capture_fh.write((line + "\n").encode("utf-8", errors="replace"))
 
@@ -226,58 +228,139 @@ class StratumSim:
             except Exception:
                 pass
 
+    def _short_label(self, label):
+        """Shorten host:port labels for table display.  Known prefixes get
+        canonical short names; otherwise truncate to 10 chars."""
+        SHORT = {
+            "109.161.52.148": "ours",
+            "p2p-spb.xyz": "kr-spb",
+            "rov.p2p-spb.xyz": "kr-rov",
+            "ekb.p2p-spb.xyz": "kr-ekb",
+            "usa.p2p-spb.xyz": "kr-usa",
+            "ss.antpool.com": "antp",
+            "stratum.antpool.com": "antp2",
+            "btc.f2pool.com": "f2p",
+            "stratum.f2pool.com": "f2p2",
+            "btc.viabtc.io": "viabtc",
+            "bch.viabtc.com": "viabch",
+            "stratum.braiins.com": "brain",
+            "stratum.slushpool.com": "slush",
+        }
+        host = label.rsplit(":", 1)[0]
+        return SHORT.get(host, host[:10])
+
     async def summary_loop(self):
-        """Periodic per-pool status summary printer."""
+        """Periodic per-pool status summary in scrolling-table format."""
         if self.args.summary_every <= 0:
             return
+        # Column widths
+        cols = [
+            ("time",     10),
+            ("pool",     8),
+            ("notif",    6),
+            ("setdiff",  8),
+            ("last_diff", 12),
+            ("last_jobid", 14),
+            ("cadence",  9),
+            ("quiet",    7),
+            ("jobid_pat", 9),
+            ("alerts",   28),
+        ]
+        def fmt_row(values, color=None):
+            cells = []
+            for (_, w), v in zip(cols, values):
+                s = str(v) if v is not None else "-"
+                if len(s) > w-1: s = s[:w-2] + ".."
+                cells.append(s.ljust(w))
+            line = " ".join(cells)
+            if color and not self.args.no_color: line = C(color, line)
+            return line
+        header = fmt_row([c[0].upper() for c in cols], color="1;33")
+        sep    = " ".join("-" * (w-1) for _, w in cols)
+
+        cycles = 0
         while True:
             await asyncio.sleep(self.args.summary_every)
             if not self.state:
                 continue
+            # Reprint header every 12 cycles
+            if cycles % 12 == 0:
+                print()
+                print(header, flush=True)
+                print(sep, flush=True)
+                if self.capture_fh:
+                    self.capture_fh.write(("\n" + header + "\n" + sep + "\n").encode("utf-8"))
+            cycles += 1
+
             elapsed = time.time() - self.start_time
-            print(C("1;36", "[%s] === SUMMARY at t+%.0fs ===" % (now_ts(), elapsed))
-                  if not self.args.no_color else
-                  "[%s] === SUMMARY at t+%.0fs ===" % (now_ts(), elapsed),
-                  flush=True)
+            elapsed_str = "+%dm%02ds" % (elapsed // 60, elapsed % 60)
+
             for label, st in self.state.items():
+                short = self._short_label(label)
                 last_evt = time.time() - st.get("last_event_at", time.time())
-                # notify cadence (mean over the entire session)
-                cadence = ""
+                # notify cadence
                 nt = st.get("notify_times", [])
+                cadence = "-"
                 if len(nt) > 1:
                     gaps = [nt[i+1]-nt[i] for i in range(len(nt)-1)]
-                    cadence = " cadence=%.1fs" % (sum(gaps)/len(gaps))
-                # jobid pattern check
-                jp = ""
+                    cadence = "%.1fs" % (sum(gaps)/len(gaps))
+                # jobid pattern
                 jl = st.get("jobids", [])
+                pat = "-"
                 if len(jl) >= 3:
                     try:
-                        ints = [int(j) for j in jl]
+                        ints = [int(j) for j in jl[-10:]]  # only check recent 10
                         mono = all(ints[i] < ints[i+1] for i in range(len(ints)-1))
-                        jp = " jobid=%s" % ("MONO_INT" if mono else "RAND_INT")
+                        pat = "MONO_INT" if mono else "RAND_INT"
                     except ValueError:
-                        jp = " jobid=NON_INT"
-                others = ",".join("%s:%d" % (k, v) for k, v in st.get("other_method_count", {}).items())
-                others = " other=" + others if others else ""
-                xchg = ""
+                        pat = "NON_INT"
+                # alerts column: condense any unusual events
+                alerts = []
                 if st.get("extranonce_changes", 0) > 0:
-                    xchg = " EXT_CHANGED:%d" % st["extranonce_changes"]
+                    alerts.append("EXT:%d" % st["extranonce_changes"])
                 if st.get("reconnect_requests", 0) > 0:
-                    xchg += " RECONNECT:%d" % st["reconnect_requests"]
-                vm = ""
+                    alerts.append("RECN:%d" % st["reconnect_requests"])
                 if st.get("version_mask"):
-                    vm = " vmask=%s" % st["version_mask"]
-                bytes_kb = st.get("bytes_in", 0) / 1024.0
-                line = ("  [%s] notifies=%d set_diff=%d last_diff=%s last_jobid=%r"
-                        " quiet=%.1fs bytes=%.1fKB%s%s%s%s") % (
-                    label,
-                    st.get("notify_count", 0), st.get("set_diff_count", 0),
-                    st.get("last_diff"), st.get("last_jobid"),
-                    last_evt, bytes_kb,
-                    cadence, jp, others, vm + xchg)
-                print(C("36", line) if not self.args.no_color else line, flush=True)
+                    alerts.append("vmask")
+                if st.get("error_count", 0) > 0:
+                    alerts.append("ERR:%d" % st["error_count"])
+                for k, v in st.get("other_method_count", {}).items():
+                    alerts.append("%s:%d" % (k.replace("mining.", "m.").replace("client.", "c."), v))
+                if last_evt > 60:
+                    alerts.append("STALE:%ds" % int(last_evt))
+                alerts_str = ",".join(alerts) if alerts else "ok"
+
+                last_diff = st.get("last_diff")
+                if isinstance(last_diff, float):
+                    last_diff_s = "%.4g" % last_diff
+                else:
+                    last_diff_s = str(last_diff) if last_diff is not None else "-"
+
+                # Determine row color: red on errors, yellow on staleness, green on ok
+                row_color = None
+                if not self.args.no_color:
+                    if "ERR:" in alerts_str or "STALE:" in alerts_str:
+                        row_color = "31"
+                    elif st.get("notify_count", 0) > 0 and last_evt < 30:
+                        row_color = "32"
+                    else:
+                        row_color = "37"
+
+                row = fmt_row([
+                    elapsed_str,
+                    short,
+                    st.get("notify_count", 0),
+                    st.get("set_diff_count", 0),
+                    last_diff_s,
+                    st.get("last_jobid"),
+                    cadence,
+                    "%.1fs" % last_evt,
+                    pat,
+                    alerts_str,
+                ], color=row_color)
+                print(row, flush=True)
                 if self.capture_fh:
-                    self.capture_fh.write((line + "\n").encode("utf-8", errors="replace"))
+                    self.capture_fh.write((row + "\n").encode("utf-8", errors="replace"))
 
 
 async def main():
@@ -300,6 +383,10 @@ async def main():
     p.add_argument("--summary-every", type=float, default=0.0,
                    help="seconds between periodic per-pool status summaries (default 0 = off; "
                         "recommended 30-60 for long observations)")
+    p.add_argument("--quiet-wire", action="store_true",
+                   help="suppress per-line raw wire output (only print summary table). "
+                        "Use with --summary-every for clean scrolling-table view.  "
+                        "Capture file always gets the full wire trace.")
     args = p.parse_args()
 
     targets = args.target or [
