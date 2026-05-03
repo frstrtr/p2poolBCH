@@ -186,6 +186,22 @@ class StratumRPCMiningProvider(object):
         self._ping_active = False
         self._ping_call = None
         self._last_reconnect_at = 0  # timestamp of last client.reconnect sent
+        # FR-1.15 quirk #1: jobids MUST be monotonically increasing.  The
+        # Amlogic Stratum dispatcher in stock Bitmain firmware sometimes
+        # holds onto previous work for 10-30s if the new jobid is "less
+        # than" the previous one in lexicographical order.  Random ints
+        # (our previous behaviour) trigger this regularly.  Per-session
+        # counter starting at 1 keeps every notify strictly newer than
+        # the last.  Wraps at 2**32 (4 billion) — at ~30 notifies/sec
+        # that's many years.  Outside the handler_map TTL (300s) so no
+        # collision risk.
+        self._jobid_counter = 0
+        # FR-1.15 quirk #3: race condition where simultaneous arrival of
+        # set_difficulty + notify can corrupt the miner's internal target
+        # to 0 or 0xFFFF.  Workaround: only emit set_difficulty when the
+        # diff actually changed, and pause briefly before the notify so
+        # the miner has time to process the new diff before the new job.
+        self._last_sent_diff = None
         # Throttle the "deferred work send" warning during long startup
         # phases (peers connecting / sharechain download / bitcoind down)
         # so we log at most once per _DEFERRED_WORK_LOG_INTERVAL.
@@ -490,20 +506,27 @@ class StratumRPCMiningProvider(object):
             if self.target > floor_target:
                 self.target = floor_target
             self.target = max(x['min_share_target'], self.target)
-        # Stratum jobid: 2**32 range (max 10 decimal digits) matches kr1z1s
-        # and upstream p2pool conventions.  Strict CGMiner-derived parsers in
-        # stock Bitmain firmware (Antminer S21+ FR-1.15 confirmed) have
-        # fixed-size buffers for the jobid string and silently drop notify
-        # messages with longer ids.  Our previous range 2**128 produced
-        # 39-char decimal strings which overflowed those buffers — miners
-        # accepted the connection but never submitted shares because they
-        # couldn't echo the jobid back in mining.submit.  2**32 = 4 billion
-        # unique ids gives essentially zero collision risk within the
-        # handler_map's lifetime (300s expiry).
-        jobid = str(random.randrange(2**32))
+        # Jobid generation: monotonically increasing per-session counter
+        # (FR-1.15 quirk #1 — Amlogic dispatcher holds onto previous work
+        # for 10-30s if new jobid is "less than" previous in
+        # lexicographical order).  Counter wraps at 2**32 (well beyond
+        # handler_map TTL).  10-digit max width keeps strict CGMiner
+        # parsers in Bitmain stock firmware happy (their fixed-size jobid
+        # buffer overflowed our previous 2**128 random ids).
+        self._jobid_counter = (self._jobid_counter + 1) % (2**32)
+        jobid = str(self._jobid_counter)
         new_diff = bitcoin_data.target_to_difficulty(self.target)*self.wb.net.DUMB_SCRYPT_DIFF
-        self._trace('-->', 'set_difficulty', diff='%.4g' % new_diff)
-        self.other.svc_mining.rpc_set_difficulty(new_diff).addErrback(lambda err: None)
+        # FR-1.15 quirk #3: only emit set_difficulty when the diff
+        # actually changed; emitting it on every notify (when diff is
+        # unchanged) wastes a wire message and increases the chance of
+        # the simultaneous-arrival race that corrupts the miner's
+        # internal target.  When diff DOES change, we still issue
+        # set_difficulty before notify on the same TCP socket — the
+        # ordering is preserved by Twisted's serialized writes.
+        if new_diff != self._last_sent_diff:
+            self._trace('-->', 'set_difficulty', diff='%.4g' % new_diff)
+            self.other.svc_mining.rpc_set_difficulty(new_diff).addErrback(lambda err: None)
+            self._last_sent_diff = new_diff
         self._trace('-->', 'notify', jobid=jobid, clean=True)
         # Hex encoding of the 4-byte fields version/nbits/ntime: legacy
         # default is BE (LE pack + _swap4 = BE bytes); STRATUM_NOTIFY_HEX_LE
