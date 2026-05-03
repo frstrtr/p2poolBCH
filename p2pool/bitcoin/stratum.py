@@ -47,20 +47,26 @@ DISABLE_IDLE_NUDGE   = _envflag('STRATUM_DISABLE_IDLE_NUDGE')
 # but never submitting, AND raising STRATUM_MIN_INITIAL_DIFF didn't help.
 NOTIFY_HEX_LE        = _envflag('STRATUM_NOTIFY_HEX_LE')
 # Diff escalation experiment: when set to N seconds (>0) and no submits
-# have arrived from a session within N seconds of the last work send,
-# automatically double the effective diff and re-push work.  Continues
-# doubling every N seconds until either (a) the first submit arrives
-# (vardiff takes over), (b) the connection drops, or (c) the diff hits
+# have arrived from a session within N seconds, multiply the effective
+# diff by VARDIFF_CLIP (= the same factor vardiff itself uses at max
+# ramp-up speed for an actively submitting miner).  Continues each step
+# every N seconds until either (a) the first submit arrives (vardiff
+# takes over), (b) the connection drops, or (c) the diff hits
 # RATCHET_MAX (default 2^24 = 16,777,216).
 #
 # Use case: experimentally probe the FR-1.15 firmware threshold by
-# climbing power-of-2 diff values within a single warm-backup session.
+# escalating diff at the SAME natural pace vardiff would use for an
+# active miner — no magic numbers, just self-driven vardiff for a
+# session that has no actual samples to drive the loop.
 # Pre-condition: STRATUM_FIXED_INITIAL_DIFF must be set (gives us a
-# defined starting value); the ratchet multiplies that base by 2**N
-# per step.
+# defined starting value); the ratchet multiplies that base by
+# VARDIFF_CLIP**N per step.
 #
-# Recommended values: NO_SUBMIT_RATCHET_SECONDS=20 (4-5 escalations
-# during a typical 90-sec warm-backup session, sweep 65k→1M).
+# Recommended: STRATUM_NO_SUBMIT_RATCHET_SECONDS=30 with default
+# VARDIFF_CLIP=10.0 sweeps 65k → 650k → 6.5M → 16M (cap) over
+# ~90 seconds — natural aggressive ramp-up rate.
+# With VARDIFF_CLIP=2.0 (kr1z1s-style), same period sweeps slower:
+# 65k → 130k → 260k → 520k → 1M ... over 5 steps in 150 seconds.
 # Default 0 = off.
 NO_SUBMIT_RATCHET_SECONDS = _envfloat('STRATUM_NO_SUBMIT_RATCHET_SECONDS', 0.0)
 NO_SUBMIT_RATCHET_MAX     = int(_envfloat('STRATUM_NO_SUBMIT_RATCHET_MAX', 16777216))
@@ -170,7 +176,7 @@ if MIN_INITIAL_DIFF > 0:
 if FIXED_INITIAL_DIFF > 0:
     print 'STRATUM: FORCED initial pseudoshare difficulty = %g via STRATUM_FIXED_INITIAL_DIFF (overrides natural calc)' % FIXED_INITIAL_DIFF
 if NO_SUBMIT_RATCHET_SECONDS > 0:
-    print 'STRATUM: no-submit DIFF RATCHET = double every %.1fs (cap %d) via STRATUM_NO_SUBMIT_RATCHET_SECONDS' % (NO_SUBMIT_RATCHET_SECONDS, NO_SUBMIT_RATCHET_MAX)
+    print 'STRATUM: no-submit DIFF RATCHET = x%.3g every %.1fs (cap %d) via STRATUM_NO_SUBMIT_RATCHET_SECONDS' % (VARDIFF_CLIP, NO_SUBMIT_RATCHET_SECONDS, NO_SUBMIT_RATCHET_MAX)
 if NOTIFY_HEX_LE:
     print 'STRATUM: mining.notify version/nbits/ntime hex sent as LITTLE-ENDIAN via STRATUM_NOTIFY_HEX_LE'
 if EXTRANONCE1_LEN > 0:
@@ -518,9 +524,12 @@ class StratumRPCMiningProvider(object):
         # ratchet normally from there.  Skipped for fixed_target users
         # (operator opted into a manual diff via the worker name suffix).
         if FIXED_INITIAL_DIFF > 0 and not self.fixed_target and len(self.recent_shares) == 0:
-            # Apply ratchet multiplier (2^steps).  Steps reset to 0 on each
+            # Apply ratchet multiplier: same factor vardiff itself uses for
+            # max-rate ramp-up (VARDIFF_CLIP).  Steps reset to 0 on each
             # connection (per-session state) and increment via _ratchet_diff.
-            effective_diff = FIXED_INITIAL_DIFF * (2 ** self._ratchet_steps)
+            # When NO_SUBMIT_RATCHET disabled, steps stays 0 and effective
+            # diff equals FIXED_INITIAL_DIFF unchanged.
+            effective_diff = FIXED_INITIAL_DIFF * (VARDIFF_CLIP ** self._ratchet_steps)
             forced_target = bitcoin_data.difficulty_to_target(
                 effective_diff / self.wb.net.DUMB_SCRYPT_DIFF)
             self.target = max(x['min_share_target'], forced_target)
@@ -602,12 +611,13 @@ class StratumRPCMiningProvider(object):
                     NO_SUBMIT_RATCHET_SECONDS, self._ratchet_diff)
 
     def _ratchet_diff(self):
-        # Fired by the no-submit timer.  Doubles the effective diff (one
-        # power-of-2 step) and triggers a fresh _send_work so the miner
-        # sees the new value.  Stops escalating once the cap is reached.
+        # Fired by the no-submit timer.  Multiplies the effective diff by
+        # VARDIFF_CLIP (= the same magnitude vardiff uses for max-rate
+        # ramp-up of an active miner) and triggers a fresh _send_work so
+        # the miner sees the new value.  Stops at the ceiling.
         if len(self.recent_shares) > 0:
             return  # safety: vardiff already started, leave alone
-        next_diff = FIXED_INITIAL_DIFF * (2 ** (self._ratchet_steps + 1))
+        next_diff = FIXED_INITIAL_DIFF * (VARDIFF_CLIP ** (self._ratchet_steps + 1))
         if next_diff > NO_SUBMIT_RATCHET_MAX:
             return  # ceiling reached
         self._ratchet_steps += 1
