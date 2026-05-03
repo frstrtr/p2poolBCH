@@ -79,6 +79,21 @@ NO_SUBMIT_RATCHET_MAX     = int(_envfloat('STRATUM_NO_SUBMIT_RATCHET_MAX', 16777
 # the first submit OR the cap.  Coexists with seconds-based ratchet:
 # whichever fires first applies.  Default off.
 RATCHET_PER_NOTIFY        = _envflag('STRATUM_RATCHET_PER_NOTIFY')
+# AntPool-style idle downshift: if no submits arrive within
+# IDLE_DOWNSHIFT_SECONDS, divide the effective diff by IDLE_DOWNSHIFT_FACTOR
+# (default 4.0).  Continues every IDLE_DOWNSHIFT_SECONDS until the diff
+# reaches IDLE_DOWNSHIFT_FLOOR or the miner submits.  Inverse of the
+# NO_SUBMIT_RATCHET upshift — meant for production retention rather than
+# stress testing.  In p2pool, lowering stratum diff is strictly safe:
+# sub-chain-diff submissions are pseudoshares (accepted, used for
+# hashrate/vardiff), never enter the share chain, never rejected.
+# Default 0 = off.  Recommended for FR-1.15 fleets:
+# STRATUM_FIXED_INITIAL_DIFF=65536 + STRATUM_IDLE_DOWNSHIFT_SECONDS=30
+# + STRATUM_IDLE_DOWNSHIFT_FACTOR=4 + STRATUM_IDLE_DOWNSHIFT_FLOOR=4096
+# sweeps 65536 -> 16384 -> 4096 over 60s, matching AntPool BCH cadence.
+IDLE_DOWNSHIFT_SECONDS    = _envfloat('STRATUM_IDLE_DOWNSHIFT_SECONDS', 0.0)
+IDLE_DOWNSHIFT_FACTOR     = max(1.001, _envfloat('STRATUM_IDLE_DOWNSHIFT_FACTOR', 4.0))
+IDLE_DOWNSHIFT_FLOOR      = _envfloat('STRATUM_IDLE_DOWNSHIFT_FLOOR', 1024.0)
 # Forced initial pseudoshare difficulty (in stratum diff units).  When
 # set to a positive value, _send_work clamps the per-session vardiff
 # state to EXACTLY this value on the first notify, ignoring the
@@ -188,6 +203,8 @@ if NO_SUBMIT_RATCHET_SECONDS > 0:
     print 'STRATUM: no-submit DIFF RATCHET = x%.3g every %.1fs (cap %d) via STRATUM_NO_SUBMIT_RATCHET_SECONDS' % (VARDIFF_CLIP, NO_SUBMIT_RATCHET_SECONDS, NO_SUBMIT_RATCHET_MAX)
 if RATCHET_PER_NOTIFY:
     print 'STRATUM: per-notify DIFF RATCHET = x%.3g every new job (cap %d) via STRATUM_RATCHET_PER_NOTIFY' % (VARDIFF_CLIP, NO_SUBMIT_RATCHET_MAX)
+if IDLE_DOWNSHIFT_SECONDS > 0:
+    print 'STRATUM: idle DIFF DOWNSHIFT = /%g every %.1fs (floor %g) via STRATUM_IDLE_DOWNSHIFT_SECONDS' % (IDLE_DOWNSHIFT_FACTOR, IDLE_DOWNSHIFT_SECONDS, IDLE_DOWNSHIFT_FLOOR)
 if NOTIFY_HEX_LE:
     print 'STRATUM: mining.notify version/nbits/ntime hex sent as LITTLE-ENDIAN via STRATUM_NOTIFY_HEX_LE'
 if EXTRANONCE1_LEN > 0:
@@ -245,6 +262,12 @@ class StratumRPCMiningProvider(object):
         # or connection close.
         self._ratchet_steps = 0
         self._ratchet_timer = None
+        # AntPool-style idle downshift state (env-gated via
+        # STRATUM_IDLE_DOWNSHIFT_SECONDS).  Each step divides the effective
+        # diff by IDLE_DOWNSHIFT_FACTOR; cancels on first submit, stops at
+        # IDLE_DOWNSHIFT_FLOOR.
+        self._downshift_steps = 0
+        self._downshift_timer = None
         # Throttle the "deferred work send" warning during long startup
         # phases (peers connecting / sharechain download / bitcoind down)
         # so we log at most once per _DEFERRED_WORK_LOG_INTERVAL.
@@ -541,6 +564,13 @@ class StratumRPCMiningProvider(object):
             # When NO_SUBMIT_RATCHET disabled, steps stays 0 and effective
             # diff equals FIXED_INITIAL_DIFF unchanged.
             effective_diff = FIXED_INITIAL_DIFF * (VARDIFF_CLIP ** self._ratchet_steps)
+            # Apply AntPool-style idle downshift: each step divides by
+            # IDLE_DOWNSHIFT_FACTOR.  Coexists with upshift (typically
+            # only one is configured at a time).
+            if self._downshift_steps > 0:
+                effective_diff = effective_diff / (IDLE_DOWNSHIFT_FACTOR ** self._downshift_steps)
+                if effective_diff < IDLE_DOWNSHIFT_FLOOR:
+                    effective_diff = IDLE_DOWNSHIFT_FLOOR
             forced_target = bitcoin_data.difficulty_to_target(
                 effective_diff / self.wb.net.DUMB_SCRYPT_DIFF)
             self.target = max(x['min_share_target'], forced_target)
@@ -631,6 +661,17 @@ class StratumRPCMiningProvider(object):
             if next_diff <= NO_SUBMIT_RATCHET_MAX:
                 self._ratchet_steps += 1
 
+        # Schedule idle-downshift timer: if no submits arrive within
+        # IDLE_DOWNSHIFT_SECONDS, divide the effective diff by
+        # IDLE_DOWNSHIFT_FACTOR and re-emit work.  Continues stepping
+        # until floor reached or first submit.  Cancelled on submit /
+        # connection close.  AntPool-style retention behavior.
+        if (IDLE_DOWNSHIFT_SECONDS > 0 and FIXED_INITIAL_DIFF > 0
+                and not self.fixed_target and len(self.recent_shares) == 0):
+            if self._downshift_timer is None or not self._downshift_timer.active():
+                self._downshift_timer = reactor.callLater(
+                    IDLE_DOWNSHIFT_SECONDS, self._downshift_diff)
+
     def _ratchet_diff(self):
         # Fired by the no-submit timer.  Multiplies the effective diff by
         # VARDIFF_CLIP (= the same magnitude vardiff uses for max-rate
@@ -647,6 +688,26 @@ class StratumRPCMiningProvider(object):
         except Exception:
             log.err(None, 'ratchet _send_work failed:')
 
+    def _downshift_diff(self):
+        # Fired by the idle-downshift timer.  Divides the effective diff
+        # by IDLE_DOWNSHIFT_FACTOR and triggers a fresh _send_work so the
+        # miner sees the lower value.  Stops at IDLE_DOWNSHIFT_FLOOR.
+        # AntPool-style retention behavior — opposite polarity of
+        # _ratchet_diff (which upshifts to stress-test).
+        if len(self.recent_shares) > 0:
+            return  # safety: miner started submitting, leave alone
+        # Compute what the next step would produce, accounting for the
+        # current upshift state (if both are configured).
+        upshifted = FIXED_INITIAL_DIFF * (VARDIFF_CLIP ** self._ratchet_steps)
+        next_diff = upshifted / (IDLE_DOWNSHIFT_FACTOR ** (self._downshift_steps + 1))
+        if next_diff < IDLE_DOWNSHIFT_FLOOR:
+            return  # floor reached, stop stepping (timer not rescheduled)
+        self._downshift_steps += 1
+        try:
+            self._send_work()
+        except Exception:
+            log.err(None, 'downshift _send_work failed:')
+
     def rpc_submit(self, worker_name, job_id, extranonce2, ntime, nonce, version_bits = None, *args):
         #asicboost: version_bits is the version mask that the miner used
         self._trace('<--', 'submit', worker=worker_name, jobid=job_id,
@@ -656,6 +717,10 @@ class StratumRPCMiningProvider(object):
         if self._ratchet_timer is not None and self._ratchet_timer.active():
             self._ratchet_timer.cancel()
             self._ratchet_timer = None
+        # Same for the idle downshift — miner is now active.
+        if self._downshift_timer is not None and self._downshift_timer.active():
+            self._downshift_timer.cancel()
+            self._downshift_timer = None
         worker_name = worker_name.strip()
         # Track every submit attempt (regardless of accept/reject) for diagnostics
         worker_info = self.wb.connected_workers.get(worker_name)
@@ -779,6 +844,9 @@ class StratumRPCMiningProvider(object):
         if self._ratchet_timer is not None and self._ratchet_timer.active():
             self._ratchet_timer.cancel()
             self._ratchet_timer = None
+        if self._downshift_timer is not None and self._downshift_timer.active():
+            self._downshift_timer.cancel()
+            self._downshift_timer = None
         self.wb.new_work_event.unwatch(self.watch_id)
 
 class StratumProtocol(jsonrpc.LineBasedPeer):
