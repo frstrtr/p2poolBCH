@@ -74,11 +74,24 @@ services:
       - p2pool-data:/p2pool/data
 
     # Resource limits (tune to your hardware)
+    #
+    # PyPy + Twisted reactor benefit from headroom: stratum render, p2p
+    # peer chatter, share-chain DB writes, and bitcoind RPC fan-out all run
+    # in the same process and contend for CPU.  kr1z1s pins their bare-metal
+    # daemon across all CPUs (`taskset 0xFFFFFFFF`) — capping us at 2 was a
+    # latency tax under load.  Raise to 8 and let the host scheduler place.
+    #
+    # If your host has hybrid P/E cores (Intel 12th gen+, AMD Zen 5 X3D),
+    # uncomment `cpuset` and list only the performance core IDs (check via
+    # `lscpu --extended` — look for MAXMHZ; P-cores have the higher value).
+    # Example for a 6P+8E Intel chip: cpuset: "0-11" (P-cores + their SMT
+    # siblings).
     deploy:
       resources:
         limits:
-          cpus: "2"
-          memory: "1g"
+          cpus: "8"
+          memory: "4g"
+    # cpuset: "0-11"   # uncomment + list P-core IDs for hybrid CPUs
 
 # =============================================================================
 # ALTERNATIVE TOPOLOGIES — copy into the service block above to switch
