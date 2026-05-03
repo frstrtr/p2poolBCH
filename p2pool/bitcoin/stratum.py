@@ -48,20 +48,25 @@ DISABLE_IDLE_NUDGE   = _envflag('STRATUM_DISABLE_IDLE_NUDGE')
 NOTIFY_HEX_LE        = _envflag('STRATUM_NOTIFY_HEX_LE')
 # Minimum initial pseudoshare difficulty floor (in stratum diff units).
 # Stock Bitmain firmware (Antminer S21+ FR-1.15+) silently refuses to
-# submit shares when set_difficulty is below an internal threshold
-# (~1k–16k depending on model/build).  Without submits, vardiff has no
-# samples to adapt and stays stuck at the cold-start seed (often ~257
-# on a busy node) — and the firmware then closes the connection cleanly
-# after ~90 s ("no shares accepted in N s, try the backup pool").
+# submit shares when set_difficulty is below an internal threshold.
+# External documentation (and 2026-05-03 empirical confirmation) places
+# the FR-1.15 threshold at 65536 — pools offering lower initial diff
+# are treated as "garbage traffic" and the firmware refuses to hash at
+# all on them.  Without submits, vardiff has no samples to adapt and
+# stays stuck at the cold-start seed — the firmware then closes the
+# connection cleanly after ~90 s ("no shares accepted in N s, try the
+# backup pool"), producing the warm-backup keepalive cycle.
 # Setting this floor ensures the *first* notify already meets the
 # firmware's threshold; vardiff samples on the first submit and takes
 # over normally from there.  Vnish, T21, S19, and bitaxe all submit
 # fine at lower diffs so they aren't broken by raising this floor —
-# they just produce shares less often (per-share hashrate accuracy
-# drops slightly for the small ones).  Default 0 = no floor (legacy
-# behaviour).  Recommended: 16384–65536 for fleets containing stock
-# Antminer S21/S21+.  Clamped to consensus min_share_target inside
-# _send_work so we never produce sub-consensus pseudoshares.
+# they just produce shares less often.  Default 0 = no floor (legacy
+# behaviour).  **Recommended: 65536 for fleets containing stock
+# Antminer S21+ FR-1.15.**  Lower values (16k-32k) leave the firmware
+# in garbage-traffic perception even though they were proposed in
+# earlier internal notes — those notes were incomplete.  Clamped to
+# consensus min_share_target inside _send_work so we never produce
+# sub-consensus pseudoshares.
 MIN_INITIAL_DIFF     = _envfloat('STRATUM_MIN_INITIAL_DIFF', 0.0)
 # Length of the server-assigned extranonce1 prefix, in BYTES.  Stratum
 # convention: the pool reserves a session-unique extranonce1 prefix and
