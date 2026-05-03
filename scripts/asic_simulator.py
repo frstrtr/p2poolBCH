@@ -250,8 +250,13 @@ class StratumSim:
         return SHORT.get(host, host[:10])
 
     async def summary_loop(self):
-        """Periodic per-pool status summary in scrolling-table format."""
-        if self.args.summary_every <= 0:
+        """Periodic per-pool status summary in scrolling-table format.
+        Two cadences: --tick-every (fast, e.g. 1.0s) emits one row per pool
+        per tick; --summary-every (slow, e.g. 30.0s) emits a MILESTONE
+        delta block summarizing the last interval.  Either or both can be on."""
+        tick_interval = self.args.tick_every if self.args.tick_every > 0 else None
+        milestone_interval = self.args.summary_every if self.args.summary_every > 0 else None
+        if not tick_interval and not milestone_interval:
             return
         # Column widths
         cols = [
@@ -278,13 +283,19 @@ class StratumSim:
         header = fmt_row([c[0].upper() for c in cols], color="1;33")
         sep    = " ".join("-" * (w-1) for _, w in cols)
 
+        # Determine tick step (smallest active interval, falls back to milestone)
+        tick_step = tick_interval if tick_interval else milestone_interval
+        last_milestone = time.time()
+        # Snapshots for milestone deltas
+        snapshot = {}  # label -> dict of last counter values
+
         cycles = 0
         while True:
-            await asyncio.sleep(self.args.summary_every)
+            await asyncio.sleep(tick_step)
             if not self.state:
                 continue
-            # Reprint header every 12 cycles
-            if cycles % 12 == 0:
+            # Reprint header every 30 ticks (keeps it visible for any tick rate)
+            if cycles % 30 == 0:
                 print()
                 print(header, flush=True)
                 print(sep, flush=True)
@@ -294,6 +305,9 @@ class StratumSim:
 
             elapsed = time.time() - self.start_time
             elapsed_str = "+%dm%02ds" % (elapsed // 60, elapsed % 60)
+            now = time.time()
+            do_milestone = (milestone_interval is not None and
+                            (now - last_milestone) >= milestone_interval)
 
             for label, st in self.state.items():
                 short = self._short_label(label)
@@ -346,21 +360,58 @@ class StratumSim:
                     else:
                         row_color = "37"
 
-                row = fmt_row([
-                    elapsed_str,
-                    short,
-                    st.get("notify_count", 0),
-                    st.get("set_diff_count", 0),
-                    last_diff_s,
-                    st.get("last_jobid"),
-                    cadence,
-                    "%.1fs" % last_evt,
-                    pat,
-                    alerts_str,
-                ], color=row_color)
-                print(row, flush=True)
+                # Only emit per-pool tick row if --tick-every is on
+                if tick_interval is not None:
+                    row = fmt_row([
+                        elapsed_str,
+                        short,
+                        st.get("notify_count", 0),
+                        st.get("set_diff_count", 0),
+                        last_diff_s,
+                        st.get("last_jobid"),
+                        cadence,
+                        "%.1fs" % last_evt,
+                        pat,
+                        alerts_str,
+                    ], color=row_color)
+                    print(row, flush=True)
+                    if self.capture_fh:
+                        self.capture_fh.write((row + "\n").encode("utf-8", errors="replace"))
+
+            # 30-second milestone: print delta block since last milestone
+            if do_milestone:
+                # elapsed_str already starts with '+', so don't double it
+                ms_header = " " * 11 + C("1;35", "--- MILESTONE %s — last %.0fs deltas ---" % (
+                    elapsed_str, milestone_interval)) if not self.args.no_color else \
+                    "           --- MILESTONE %s — last %.0fs deltas ---" % (
+                        elapsed_str, milestone_interval)
+                print(ms_header, flush=True)
                 if self.capture_fh:
-                    self.capture_fh.write((row + "\n").encode("utf-8", errors="replace"))
+                    self.capture_fh.write((ms_header + "\n").encode("utf-8"))
+                for label, st in self.state.items():
+                    short = self._short_label(label)
+                    prev = snapshot.get(label, {})
+                    dn = st.get("notify_count", 0) - prev.get("notify_count", 0)
+                    dd = st.get("set_diff_count", 0) - prev.get("set_diff_count", 0)
+                    prev_diff = prev.get("last_diff")
+                    cur_diff = st.get("last_diff")
+                    diff_change = ""
+                    if prev_diff is not None and cur_diff is not None and prev_diff != cur_diff:
+                        diff_change = " DIFF_CHANGED %s→%s" % (prev_diff, cur_diff)
+                    msline = "           [%s] +%d notif, +%d setdiff%s" % (
+                        short, dn, dd, diff_change)
+                    if not self.args.no_color:
+                        msline = C("35", msline)
+                    print(msline, flush=True)
+                    if self.capture_fh:
+                        self.capture_fh.write((msline + "\n").encode("utf-8"))
+                    # Update snapshot
+                    snapshot[label] = dict(
+                        notify_count=st.get("notify_count", 0),
+                        set_diff_count=st.get("set_diff_count", 0),
+                        last_diff=st.get("last_diff"),
+                    )
+                last_milestone = now
 
 
 async def main():
@@ -383,6 +434,11 @@ async def main():
     p.add_argument("--summary-every", type=float, default=0.0,
                    help="seconds between periodic per-pool status summaries (default 0 = off; "
                         "recommended 30-60 for long observations)")
+    p.add_argument("--tick-every", type=float, default=0.0,
+                   help="seconds between per-pool status TICK rows (default 0 = off; "
+                        "set 1.0 for fast-scrolling 1Hz live view).  Rows show cumulative "
+                        "state; deltas in last N seconds appear in DELTA column when "
+                        "--summary-every is also set.")
     p.add_argument("--quiet-wire", action="store_true",
                    help="suppress per-line raw wire output (only print summary table). "
                         "Use with --summary-every for clean scrolling-table view.  "
