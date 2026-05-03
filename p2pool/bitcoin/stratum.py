@@ -46,6 +46,18 @@ DISABLE_IDLE_NUDGE   = _envflag('STRATUM_DISABLE_IDLE_NUDGE')
 # only if a strict-firmware miner is connecting + handshake-completing
 # but never submitting, AND raising STRATUM_MIN_INITIAL_DIFF didn't help.
 NOTIFY_HEX_LE        = _envflag('STRATUM_NOTIFY_HEX_LE')
+# Forced initial pseudoshare difficulty (in stratum diff units).  When
+# set to a positive value, _send_work clamps the per-session vardiff
+# state to EXACTLY this value on the first notify, ignoring the
+# natural local-hash-rate-derived target entirely.  This is stricter
+# than STRATUM_MIN_INITIAL_DIFF (which is only a floor, leaving the
+# natural value to apply when it's already higher).  Use this when an
+# external doc / firmware spec calls for a specific value (e.g. FR-1.15
+# documented threshold = 65536 exactly) and you want zero ambiguity in
+# what the miner sees.  Vardiff still ratchets normally after the first
+# accepted submit.  Default 0 = no override (natural calculation, plus
+# any STRATUM_MIN_INITIAL_DIFF floor).
+FIXED_INITIAL_DIFF   = _envfloat('STRATUM_FIXED_INITIAL_DIFF', 0.0)
 # Minimum initial pseudoshare difficulty floor (in stratum diff units).
 # Stock Bitmain firmware (Antminer S21+ FR-1.15+) silently refuses to
 # submit shares when set_difficulty is below an internal threshold.
@@ -137,6 +149,8 @@ if TRACE:
     print 'STRATUM: per-connection dialog trace ENABLED via STRATUM_TRACE'
 if MIN_INITIAL_DIFF > 0:
     print 'STRATUM: minimum pseudoshare-difficulty floor = %g via STRATUM_MIN_INITIAL_DIFF' % MIN_INITIAL_DIFF
+if FIXED_INITIAL_DIFF > 0:
+    print 'STRATUM: FORCED initial pseudoshare difficulty = %g via STRATUM_FIXED_INITIAL_DIFF (overrides natural calc)' % FIXED_INITIAL_DIFF
 if NOTIFY_HEX_LE:
     print 'STRATUM: mining.notify version/nbits/ntime hex sent as LITTLE-ENDIAN via STRATUM_NOTIFY_HEX_LE'
 if EXTRANONCE1_LEN > 0:
@@ -453,12 +467,24 @@ class StratumRPCMiningProvider(object):
         else:
             self.fixed_target = False
             self.target = x['share_target'] if self.target == None else max(x['min_share_target'], self.target)
+        # Apply STRATUM_FIXED_INITIAL_DIFF override (env-gated, default off).
+        # Sets the initial target to EXACTLY the configured diff, ignoring
+        # the natural local-hash-rate-derived value.  Use when an external
+        # spec demands a specific value (e.g. FR-1.15 = 65536 exactly).
+        # Only applies on the first _send_work call per session
+        # (self.target == None at that point); subsequent vardiff updates
+        # ratchet normally from there.  Skipped for fixed_target users
+        # (operator opted into a manual diff via the worker name suffix).
+        if FIXED_INITIAL_DIFF > 0 and not self.fixed_target and len(self.recent_shares) == 0:
+            forced_target = bitcoin_data.difficulty_to_target(
+                FIXED_INITIAL_DIFF / self.wb.net.DUMB_SCRYPT_DIFF)
+            self.target = max(x['min_share_target'], forced_target)
         # Apply STRATUM_MIN_INITIAL_DIFF floor (env-gated, default off).
         # Smaller target = harder = higher stratum diff; we clamp self.target
         # *down* to the configured floor's target equivalent, then re-clamp
         # *up* to consensus min_share_target.  Skipped for fixed_target users
         # (operator opted into a manual diff via the worker name suffix).
-        if MIN_INITIAL_DIFF > 0 and not self.fixed_target:
+        elif MIN_INITIAL_DIFF > 0 and not self.fixed_target:
             floor_target = bitcoin_data.difficulty_to_target(
                 MIN_INITIAL_DIFF / self.wb.net.DUMB_SCRYPT_DIFF)
             if self.target > floor_target:
