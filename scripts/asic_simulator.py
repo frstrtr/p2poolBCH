@@ -233,6 +233,9 @@ class StratumSim:
         canonical short names; otherwise truncate to 10 chars."""
         SHORT = {
             "109.161.52.148": "ours",
+            "192.168.86.112": "vm302",
+            "192.168.86.93": "vm301",
+            "192.168.86.174": "vm303-jt",
             "p2p-spb.xyz": "kr-spb",
             "rov.p2p-spb.xyz": "kr-rov",
             "ekb.p2p-spb.xyz": "kr-ekb",
