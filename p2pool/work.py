@@ -2,6 +2,7 @@ from __future__ import division
 from collections import deque
 
 import base64
+import os as _os
 import random
 import re
 import sys
@@ -14,6 +15,39 @@ import bitcoin.getwork as bitcoin_getwork, bitcoin.data as bitcoin_data
 from bitcoin import helper, script, worker_interface
 from util import forest, jsonrpc, variable, deferral, math, pack
 import p2pool, p2pool.data as p2pool_data
+
+# Server-side per-worker fixed-diff override.  Equivalent to the username
+# `+NNN` suffix trick (sets desired_pseudoshare_target → fixed_target=True
+# → vardiff bypassed entirely → diff stays locked at NNN), but applied
+# from the pool side based on a worker-name prefix match.  Use case:
+# operator can't change the miner's worker name (lost client-side admin),
+# but knows the firmware needs a specific diff to engage.  kr1z1s
+# operator described this as a "bandaid": set diff per-worker rather
+# than rely on vardiff converging from a problematic starting point.
+#
+# Format: STRATUM_FIXED_DIFF_PER_WORKER="prefix1=diff1,prefix2=diff2"
+# Examples:
+#   STRATUM_FIXED_DIFF_PER_WORKER="s21p=262144"
+#   STRATUM_FIXED_DIFF_PER_WORKER="s21p=262144,bitaxe=1024,t21=131072"
+# Match is "worker name starts with prefix".  First match wins.
+# Default: empty dict, no overrides.
+_FIXED_DIFF_PER_WORKER = {}
+try:
+    _spec = _os.environ.get('STRATUM_FIXED_DIFF_PER_WORKER', '').strip()
+    if _spec:
+        for _entry in _spec.split(','):
+            if '=' in _entry:
+                _prefix, _diff_str = _entry.split('=', 1)
+                _prefix = _prefix.strip()
+                _diff_val = float(_diff_str.strip())
+                if _prefix and _diff_val > 0:
+                    _FIXED_DIFF_PER_WORKER[_prefix] = _diff_val
+        if _FIXED_DIFF_PER_WORKER:
+            print 'WORK: per-worker fixed-diff overrides via STRATUM_FIXED_DIFF_PER_WORKER:'
+            for _k, _v in sorted(_FIXED_DIFF_PER_WORKER.items()):
+                print '  worker prefix %r -> fixed diff %g' % (_k, _v)
+except Exception as _e:
+    print >>sys.stderr, 'WORK: failed to parse STRATUM_FIXED_DIFF_PER_WORKER: %s' % _e
 
 print_throttle = 0.0
 
@@ -292,6 +326,20 @@ class WorkerBridge(worker_interface.WorkerBridge):
                 except:
                     if p2pool.DEBUG:
                         log.err()
+
+        # Server-side per-worker fixed-diff override (kr1z1s "bandaid"
+        # approach).  Only applies if the username didn't already specify
+        # a +NNN suffix — explicit client-side wins.  First matching
+        # prefix from STRATUM_FIXED_DIFF_PER_WORKER applies.
+        if _FIXED_DIFF_PER_WORKER and worker and desired_pseudoshare_target is None:
+            for _prefix, _diff_val in _FIXED_DIFF_PER_WORKER.items():
+                if worker.startswith(_prefix):
+                    try:
+                        desired_pseudoshare_target = bitcoin_data.difficulty_to_target(_diff_val)
+                    except Exception:
+                        if p2pool.DEBUG:
+                            log.err()
+                    break
 
         if self.args.address == 'dynamic':
             i = self.pubkeys.weighted()
