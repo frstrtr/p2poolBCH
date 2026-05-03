@@ -603,6 +603,26 @@ class StratumRPCMiningProvider(object):
 
 class StratumProtocol(jsonrpc.LineBasedPeer):
     def connectionMade(self):
+        # ── Latency optimizations ─────────────────────────────────────────
+        # Disable Nagle's algorithm.  Stratum frames are tiny (set_difficulty
+        # ~80 B, submit ~200 B, notify ~600 B); Nagle batches them up to 200 ms
+        # waiting for MTU-fill — pure latency tax for short JSON-RPC traffic.
+        # With TCP_NODELAY off, every frame is sent immediately.  Single
+        # biggest pool-side latency win for stratum servers; matters most for
+        # geographically-distant miners where every ms of RTT counts toward
+        # the firmware's pool-quality ranking heuristics.  Bitmain stock
+        # FR-1.15 is observed picking pools by RTT-granularity at the
+        # intra-DC level, so this is also our best shot at competing with
+        # geographically-closer pools (e.g. kr1z1s in St. Petersburg/Rostov
+        # vs us elsewhere).
+        # SO_KEEPALIVE makes the OS detect dead connections faster than
+        # application-level idle-detection, freeing resources cleanly.
+        try:
+            self.transport.setTcpNoDelay(True)
+            self.transport.setTcpKeepAlive(True)
+        except Exception:
+            pass
+        # ──────────────────────────────────────────────────────────────────
         self.svc_mining = StratumRPCMiningProvider(self.factory.wb, self.other, self.transport)
         if TRACE:
             try:
