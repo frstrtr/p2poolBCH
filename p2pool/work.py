@@ -68,6 +68,25 @@ if _KR1Z1S_COINBASE_ORDER:
 if _KR1Z1S_EXACT_COINBASE:
     print 'WORK: STRATUM_KR1Z1S_EXACT_COINBASE=1 (kr1z1s order + drops --coinbtext from push)'
 
+# Hypothesised FR-1.15 retention discriminator surfaced 2026-05-04 from
+# decompilation of kr1z1s' full codebase (12 unreleased commits past
+# jtoomim 77.0.0).  Net-net of all 4 BCH-relevant kr1z1s commits is one
+# operative line in work.py: the "limit local miner to 1.67% of pool
+# share rate" cap was changed from `/ 0.0167` (60x harder shares, the
+# upstream/jtoomim default) to `* 0.0167` (60x EASIER shares, kr1z1s).
+# The math: for an S21+ at 235 TH/s, jtoomim's cap requires ~1 share per
+# 30 min; kr1z1s' inverted cap allows ~2 shares per second (3600x more
+# frequent submission).  Hypothesis: FR-1.15 firmware ranks pools by
+# observed submit rhythm; the dense submit cadence kr1z1s allows is what
+# keeps stock-firmware S21+ retained as primary.  Gating behind env var
+# rather than default-on because this materially changes share-chain
+# dynamics (heavy miners can dominate the chain without the cap).
+_KR1Z1S_SHARE_TARGET_CAP = _os.environ.get('STRATUM_KR1Z1S_SHARE_TARGET_CAP', '').strip().lower() in (
+    '1', 'true', 'yes', 'on'
+)
+if _KR1Z1S_SHARE_TARGET_CAP:
+    print 'WORK: STRATUM_KR1Z1S_SHARE_TARGET_CAP=1 (3600x easier per-miner share-target cap, kr1z1s-style)'
+
 print_throttle = 0.0
 
 class WorkerBridge(worker_interface.WorkerBridge):
@@ -504,8 +523,19 @@ class WorkerBridge(worker_interface.WorkerBridge):
             desired_share_target = 2**256-1
             local_hash_rate = self._estimate_local_hash_rate()
             if local_hash_rate is not None:
+                # See _KR1Z1S_SHARE_TARGET_CAP rationale at module top.
+                # `/ 0.0167` (default) caps each miner at 1.67% of pool share rate
+                # (the comment is correct).  `* 0.0167` (kr1z1s) inverts the cap so
+                # the second arg becomes a high target = no effective cap = miners
+                # submit much more frequently.  The min() picks the smaller target
+                # in either case — which is `2**256-1` baseline when kr1z1s mode
+                # is on, leaving downstream vardiff as the sole share-rate control.
+                if _KR1Z1S_SHARE_TARGET_CAP:
+                    cap_attempts = local_hash_rate * self.node.net.SHARE_PERIOD * 0.0167
+                else:
+                    cap_attempts = local_hash_rate * self.node.net.SHARE_PERIOD / 0.0167
                 desired_share_target = min(desired_share_target,
-                    bitcoin_data.average_attempts_to_target(local_hash_rate * self.node.net.SHARE_PERIOD / 0.0167)) # limit to 1.67% of pool shares by modulating share difficulty
+                    bitcoin_data.average_attempts_to_target(cap_attempts)) # limit to 1.67% of pool shares by modulating share difficulty
             
             if self.node.punish:
                 print "trying to punish a share by mining a low-diff share"
