@@ -49,6 +49,25 @@ try:
 except Exception as _e:
     print >>sys.stderr, 'WORK: failed to parse STRATUM_FIXED_DIFF_PER_WORKER: %s' % _e
 
+# Optional experiment toggle: build scriptSig coinbase bytes in kr1z1s order
+# to test FR-1.15 stock-firmware sensitivity to exact scriptSig layout.
+# Default remains current frstrtr order for safety.
+_KR1Z1S_COINBASE_ORDER = _os.environ.get('STRATUM_KR1Z1S_COINBASE_ORDER', '').strip().lower() in (
+    '1', 'true', 'yes', 'on'
+)
+# Stronger experiment toggle: produce a byte-for-byte kr1z1s-style coinbase.
+# Implies KR1Z1S_COINBASE_ORDER and additionally drops self.args.coinb_texts
+# from the push_script (kr1z1s pushes only [height, mm_data]).  Use when
+# the order toggle alone hasn't shifted FR-1.15 reject rate and you want
+# to fully isolate "is it the byte layout or something deeper?".
+_KR1Z1S_EXACT_COINBASE = _os.environ.get('STRATUM_KR1Z1S_EXACT_COINBASE', '').strip().lower() in (
+    '1', 'true', 'yes', 'on'
+)
+if _KR1Z1S_COINBASE_ORDER:
+    print 'WORK: STRATUM_KR1Z1S_COINBASE_ORDER=1 (using kr1z1s scriptSig assembly order)'
+if _KR1Z1S_EXACT_COINBASE:
+    print 'WORK: STRATUM_KR1Z1S_EXACT_COINBASE=1 (kr1z1s order + drops --coinbtext from push)'
+
 print_throttle = 0.0
 
 class WorkerBridge(worker_interface.WorkerBridge):
@@ -512,16 +531,29 @@ class WorkerBridge(worker_interface.WorkerBridge):
             # and may use printable-ASCII detection as a "real pool"
             # heuristic — push-prefixed text fails that check.  The
             # truncate-to-100 floor still applies (BIP34 scriptSig limit).
-            import os as _os_for_raw_suffix
-            _raw_suffix = _os_for_raw_suffix.environ.get('STRATUM_COINBASE_RAW_SUFFIX', '')
+            _raw_suffix = _os.environ.get('STRATUM_COINBASE_RAW_SUFFIX', '')
+            # EXACT_COINBASE drops --coinbtext from the push to fully match
+            # kr1z1s' [height, mm_data] push shape.  Implies kr1z1s order.
+            if _KR1Z1S_EXACT_COINBASE:
+                _push_args = [self.current_work.value['height']] + (
+                    [mm_data] if mm_data else [])
+            else:
+                _push_args = [self.current_work.value['height']] + (
+                    [mm_data] if mm_data else []) + self.args.coinb_texts
+            _coinbase_push = script.create_push_script(_push_args)
+            if _KR1Z1S_COINBASE_ORDER or _KR1Z1S_EXACT_COINBASE:
+                # kr1z1s-compatible experiment mode:
+                #   push(height, mm_data[, coinb_texts]) + raw_suffix + coinbaseflags
+                # Default mode keeps existing order:
+                #   push(height, mm_data, coinb_texts) + coinbaseflags + raw_suffix
+                _coinbase_script = (_coinbase_push + _raw_suffix + self.current_work.value['coinbaseflags'])[:100]
+            else:
+                _coinbase_script = (_coinbase_push + self.current_work.value['coinbaseflags'] + _raw_suffix)[:100]
             share_info, gentx, other_transaction_hashes, get_share = share_type.generate_transaction(
                 tracker=self.node.tracker,
                 share_data=dict(
                     previous_share_hash=self.node.best_share_var.value,
-                    coinbase=(script.create_push_script([
-                        self.current_work.value['height'],
-                        ] + ([mm_data] if mm_data else []) + self.args.coinb_texts
-                    ) + self.current_work.value['coinbaseflags'] + _raw_suffix)[:100],
+                    coinbase=_coinbase_script,
                     nonce=random.randrange(2**32),
                     address=address,
                     subsidy=self.current_work.value['subsidy'],

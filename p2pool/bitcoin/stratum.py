@@ -172,6 +172,18 @@ NICEHASH_COMPAT      = _envflag('STRATUM_NICEHASH_COMPAT')
 # leading up to a disconnect from journald.  Verbose — leave off in
 # steady state; flip on right before reproducing a disconnect.
 TRACE                = _envflag('STRATUM_TRACE')
+REJECT_DUMP_PATH     = os.environ.get('STRATUM_REJECT_DUMP_PATH', '').strip()
+REJECT_DUMP_WORKER_PREFIX = os.environ.get('STRATUM_REJECT_DUMP_WORKER_PREFIX', '').strip()
+REJECT_ALT_PATHS_LOG = _envflag('STRATUM_REJECT_ALT_PATHS_LOG')
+# Lifetime cap for reject diagnostics (alt-paths logging + JSONL dump).
+# After this many rejects have been processed, both the verbose
+# REJECT_ALT line and the JSONL dump record are skipped — accept/reject
+# behavior is unaffected.  Default 1000 = enough for ~30 min of an
+# active productive window at 30 rejects/min, sufficient to catch the
+# pattern without flooding logs or filling /p2pool/data.
+REJECT_DUMP_LIMIT    = int(_envfloat('STRATUM_REJECT_DUMP_LIMIT', 1000))
+# Module-level counter; list-wrapped so closures can mutate it.
+_reject_diag_count = [0]
 # Vardiff per-ratchet clip factor.  The vardiff multiplier is computed as
 # (actual_interval / desired_interval) and then clamped to [1/F, F] before
 # being applied to self.target.  Default F=10.0 matches the LTC+DOGE
@@ -195,6 +207,14 @@ if NICEHASH_COMPAT:
     print 'STRATUM: NiceHash-compatible subscribe response ENABLED via STRATUM_NICEHASH_COMPAT'
 if TRACE:
     print 'STRATUM: per-connection dialog trace ENABLED via STRATUM_TRACE'
+if REJECT_DUMP_PATH:
+    print 'STRATUM: reject forensics JSONL dump ENABLED via STRATUM_REJECT_DUMP_PATH=%s' % REJECT_DUMP_PATH
+    if REJECT_DUMP_WORKER_PREFIX:
+        print 'STRATUM: reject dump worker-prefix filter = %r via STRATUM_REJECT_DUMP_WORKER_PREFIX' % REJECT_DUMP_WORKER_PREFIX
+if REJECT_ALT_PATHS_LOG:
+    print 'STRATUM: reject alternative-path diagnostics ENABLED via STRATUM_REJECT_ALT_PATHS_LOG'
+if REJECT_DUMP_PATH or REJECT_ALT_PATHS_LOG:
+    print 'STRATUM: reject diagnostics will stop after %d rejects via STRATUM_REJECT_DUMP_LIMIT' % REJECT_DUMP_LIMIT
 if MIN_INITIAL_DIFF > 0:
     print 'STRATUM: minimum pseudoshare-difficulty floor = %g via STRATUM_MIN_INITIAL_DIFF' % MIN_INITIAL_DIFF
 if FIXED_INITIAL_DIFF > 0:
@@ -219,6 +239,34 @@ else:
 def _ts():
     t = time.time()
     return time.strftime('%H:%M:%S', time.localtime(t)) + ('.%03d' % int((t % 1) * 1000))
+
+def _append_reject_dump(row):
+    if not REJECT_DUMP_PATH:
+        return
+    try:
+        parent = os.path.dirname(REJECT_DUMP_PATH)
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent)
+        with open(REJECT_DUMP_PATH, 'ab') as f:
+            f.write(json.dumps(row, sort_keys=True) + '\n')
+    except Exception:
+        log.err(None, 'STRATUM: failed writing reject dump:')
+
+def _parse_u32_from_submit_hex(h, hex_is_le):
+    raw = h.decode('hex')
+    if hex_is_le:
+        return pack.IntType(32).unpack(raw)
+    return pack.IntType(32).unpack(getwork._swap4(raw))
+
+def _format_alt_rows(rows):
+    parts = []
+    for row in rows:
+        if row.get('err'):
+            parts.append('%s:ERR' % row['label'])
+        else:
+            parts.append('%s:%.3fx%s' % (
+                row['label'], row['miss'], ' OK' if row.get('would_accept') else ''))
+    return '; '.join(parts)
 
 class StratumRPCMiningProvider(object):
     def __init__(self, wb, other, transport):
@@ -802,6 +850,170 @@ class StratumRPCMiningProvider(object):
             self._trace('==', 'REJECT', worker=worker_name, jobid=job_id,
                         age='%dms' % age_ms, vmask=(version_bits or '-'),
                         drift=drift, on_time=on_time)
+
+            alt_rows = []
+            # Lifetime cap: stop heavy diagnostics after limit reached.  Both
+            # alt-paths logging AND JSONL dump are skipped when over budget.
+            _diag_within_budget = (_reject_diag_count[0] < REJECT_DUMP_LIMIT)
+            if REJECT_ALT_PATHS_LOG and _diag_within_budget:
+                t_be = _parse_u32_from_submit_hex(ntime, False)
+                t_le = _parse_u32_from_submit_hex(ntime, True)
+                n_be = _parse_u32_from_submit_hex(nonce, False)
+                n_le = _parse_u32_from_submit_hex(nonce, True)
+
+                coinb_nonce_swapped = miner_en2 + self._extranonce1
+                coinb_nonce_zero_prefix = ('\0' * len(self._extranonce1)) + miner_en2
+                coinb_nonce_zero_all = ('\0' * len(coinb_nonce))
+
+                def _eval_path_full(label, version_i, t_i, n_i, coinb_nonce_i,
+                                    coinb1_i=None, coinb2_i=None):
+                    try:
+                        cb1 = x['coinb1'] if coinb1_i is None else coinb1_i
+                        cb2 = x['coinb2'] if coinb2_i is None else coinb2_i
+                        packed = cb1 + coinb_nonce_i + cb2
+                        merkle_root_i = bitcoin_data.check_merkle_link(
+                            bitcoin_data.hash256(packed), x['merkle_link'])
+                        # Mask timestamp to 32-bit unsigned to keep Twisted's
+                        # IntType packer happy across negative drift values.
+                        t_packed = t_i & 0xFFFFFFFF
+                        header_i = dict(
+                            version=version_i & 0xFFFFFFFF,
+                            previous_block=x['previous_block'],
+                            merkle_root=merkle_root_i,
+                            timestamp=t_packed,
+                            bits=x['bits'],
+                            nonce=n_i & 0xFFFFFFFF,
+                        )
+                        pow_hash_i = self.wb.net.PARENT.POW_FUNC(
+                            bitcoin_data.block_header_type.pack(header_i))
+                        miss_i = float(pow_hash_i) / float(job_target) if job_target > 0 else float('inf')
+                        would_accept_i = (pow_hash_i <= job_target)
+                        alt_rows.append(dict(
+                            label=label,
+                            miss=miss_i,
+                            would_accept=would_accept_i,
+                            pow_hash_hex='%064x' % pow_hash_i,
+                            header_merkle_root_hex='%064x' % merkle_root_i,
+                            header_version=version_i & 0xFFFFFFFF,
+                            header_timestamp=t_packed,
+                            header_nonce=n_i & 0xFFFFFFFF,
+                            coinbase_nonce_hex=coinb_nonce_i.encode('hex'),
+                            coinb1_modified=(coinb1_i is not None),
+                            coinb2_modified=(coinb2_i is not None),
+                        ))
+                    except Exception as e:
+                        alt_rows.append(dict(label=label, err=str(e)))
+
+                def _eval_path(label, version_i, t_i, n_i, coinb_nonce_i):
+                    _eval_path_full(label, version_i, t_i, n_i, coinb_nonce_i)
+
+                # --- Original 8 paths (submit-side reinterpretation) ---
+                _eval_path('pool_current', nversion, ntime_int, nonce_int, coinb_nonce)
+                _eval_path('flip_both_endian', nversion, t_le if not NOTIFY_HEX_LE else t_be, n_le if not NOTIFY_HEX_LE else n_be, coinb_nonce)
+                _eval_path('flip_ntime_endian', nversion, t_le if not NOTIFY_HEX_LE else t_be, nonce_int, coinb_nonce)
+                _eval_path('flip_nonce_endian', nversion, ntime_int, n_le if not NOTIFY_HEX_LE else n_be, coinb_nonce)
+                _eval_path('version_no_roll', job_version, ntime_int, nonce_int, coinb_nonce)
+                _eval_path('coinb_nonce_swapped', nversion, ntime_int, nonce_int, coinb_nonce_swapped)
+                _eval_path('coinb_nonce_zero_prefix', nversion, ntime_int, nonce_int, coinb_nonce_zero_prefix)
+                _eval_path('coinb_nonce_zero_all', nversion, ntime_int, nonce_int, coinb_nonce_zero_all)
+
+                # --- Additional version-rolling variants (firmware quirks) ---
+                # Some stock firmwares treat version_bits as the literal final
+                # nversion (no masking, no merge with job_version) — tests that.
+                if version_bits:
+                    try:
+                        vbits_int = int(version_bits, 16)
+                    except Exception:
+                        vbits_int = None
+                    if vbits_int is not None:
+                        _eval_path('version_full_bits', vbits_int, ntime_int, nonce_int, coinb_nonce)
+                        _eval_path('version_or_unmasked', job_version | vbits_int, ntime_int, nonce_int, coinb_nonce)
+
+                # --- ntime drift: clock skew or 1-tick race on the miner side ---
+                for _drift in (-2, -1, 1, 2):
+                    _eval_path('ntime_drift_%+d' % _drift, nversion,
+                               (ntime_int + _drift) & 0xFFFFFFFF,
+                               nonce_int, coinb_nonce)
+
+                # --- CachingWorkerBridge interaction tests ---
+                # Hypothesis: FR-1.15 firmware doesn't account for the wrapper's
+                # 4 trailing pool-nonce bytes appended to coinb1, and either:
+                #   (a) strips them and uses a 4-byte-shorter gentx, OR
+                #   (b) overwrites them with miner-chosen bytes (test with zeros)
+                if len(x['coinb1']) >= 4:
+                    inner_coinb1 = x['coinb1'][:-4]
+                    # (a) gentx 4 bytes shorter — no pool_nonce slot at all
+                    _eval_path_full('coinb1_strip_pool_nonce',
+                                    nversion, ntime_int, nonce_int, coinb_nonce,
+                                    coinb1_i=inner_coinb1)
+                    # (b) gentx same length but pool_nonce zeroed — preserves
+                    # tx-version + scriptSig length prefix bytes that may be
+                    # part of an FR-1.15 internal length-validation step
+                    _eval_path_full('coinb1_zero_pool_nonce',
+                                    nversion, ntime_int, nonce_int, coinb_nonce,
+                                    coinb1_i=inner_coinb1 + ('\0' * 4))
+
+                alt_accept_paths = [r['label'] for r in alt_rows if r.get('would_accept')]
+                alt_has_zero_reject_path = bool(alt_accept_paths)
+
+                print 'REJECT_ALT %s job=%s age=%dms drift=%s zero_reject=%s accept_paths=%s %s' % (
+                    worker_name, job_id, age_ms, drift,
+                    'yes' if alt_has_zero_reject_path else 'no',
+                    ','.join(alt_accept_paths) if alt_accept_paths else '-',
+                    _format_alt_rows(alt_rows))
+            else:
+                alt_accept_paths = []
+                alt_has_zero_reject_path = False
+
+            if _diag_within_budget and ((not REJECT_DUMP_WORKER_PREFIX) or worker_name.startswith(REJECT_DUMP_WORKER_PREFIX)):
+                try:
+                    peer = self.transport.getPeer()
+                    peer_ip = getattr(peer, 'host', '?')
+                    peer_port = getattr(peer, 'port', 0)
+                except Exception:
+                    peer_ip = '?'
+                    peer_port = 0
+                _append_reject_dump(dict(
+                    ts_unix=time.time(),
+                    ts_hms=_ts(),
+                    peer_ip=peer_ip,
+                    peer_port=peer_port,
+                    worker=worker_name,
+                    job_id=job_id,
+                    on_time=bool(on_time),
+                    accepted=False,
+                    age_ms=age_ms,
+                    drift=drift,
+                    version_bits=(version_bits or ''),
+                    notify_hex_le=bool(NOTIFY_HEX_LE),
+                    extranonce1_hex=self._extranonce1.encode('hex'),
+                    extranonce2_hex=extranonce2,
+                    coinbase_nonce_hex=coinb_nonce.encode('hex'),
+                    prevhash_hex='%064x' % x['previous_block'],
+                    merkle_branch_hex=[pack.IntType(256).pack(s).encode('hex') for s in x['merkle_link']['branch']],
+                    coinb1_hex=x['coinb1'].encode('hex'),
+                    coinb2_hex=x['coinb2'].encode('hex'),
+                    ntime_hex=ntime,
+                    nonce_hex=nonce,
+                    header_version=nversion,
+                    header_timestamp=ntime_int,
+                    header_nonce=nonce_int,
+                    header_bits=x['bits'].bits,
+                    header_merkle_root_hex='%064x' % header['merkle_root'],
+                    job_target_hex='%064x' % int(job_target),
+                    session_target_hex='%064x' % int(self.target),
+                    alt_paths=alt_rows,
+                    alt_accept_paths=alt_accept_paths,
+                    alt_has_zero_reject_path=alt_has_zero_reject_path,
+                ))
+
+            # Increment the lifetime counter once per reject regardless of
+            # whether dump/alt-paths actually ran (the cap should reflect
+            # rejects observed, not log lines emitted).
+            if REJECT_ALT_PATHS_LOG or REJECT_DUMP_PATH:
+                _reject_diag_count[0] += 1
+                if _reject_diag_count[0] == REJECT_DUMP_LIMIT:
+                    print 'STRATUM: reject diagnostics budget exhausted (%d rejects); skipping further dumps' % REJECT_DUMP_LIMIT
 
         # adjust difficulty on this stratum to target ~10sec/pseudoshare.
         # Only ACCEPTED shares feed vardiff samples — rejected (hash > target)
