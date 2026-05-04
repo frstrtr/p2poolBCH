@@ -146,6 +146,22 @@ MIN_INITIAL_DIFF     = _envfloat('STRATUM_MIN_INITIAL_DIFF', 0.0)
 # legacy empty extranonce1.  Recommended: 1 if any miner in the fleet
 # is Antminer stock-firmware FR-1.15 or earlier.
 EXTRANONCE1_LEN      = int(_envfloat('STRATUM_EXTRANONCE1_LEN', 0))
+# Pair set_difficulty 1:1 with every notify — legacy/upstream behaviour.
+# Our default (since commit 2a4262e) skips set_difficulty when the diff
+# is unchanged, on the theory that the dedupe avoids a notify/set_diff
+# simultaneous-arrival race.  However, 5-min asic_simulator captures
+# 2026-05-04 against kr1z1s SPB and Rostov nodes show kr1z1s emits
+# set_difficulty with EVERY notify (100% pairing), and those nodes
+# retain Antminer S21+ FR-1.15 stock firmware where ours don't.
+# Hypothesis: FR-1.15 may rely on the set_difficulty + notify pair as
+# an atomic unit — receiving notify alone (without preceding set_diff)
+# may leave the firmware's internal target stale or trigger a state
+# machine reset.  Setting STRATUM_SET_DIFF_EVERY_NOTIFY=1 reverts to
+# the always-pair behaviour, matching kr1z1s' wire shape exactly.
+# Default 0 = current dedupe behaviour (smaller wire chatter).
+SET_DIFF_EVERY_NOTIFY = _envflag('STRATUM_SET_DIFF_EVERY_NOTIFY')
+if SET_DIFF_EVERY_NOTIFY:
+    print 'STRATUM: STRATUM_SET_DIFF_EVERY_NOTIFY=1 (set_difficulty 1:1 with every notify, kr1z1s-style)'
 # Defer the first set_difficulty/notify push until *after* mining.authorize
 # completes, instead of also firing one immediately after mining.subscribe.
 # Legacy behaviour: rpc_subscribe schedules a _send_work, then rpc_authorize
@@ -643,14 +659,19 @@ class StratumRPCMiningProvider(object):
         self._jobid_counter = (self._jobid_counter + 1) % (2**32)
         jobid = str(self._jobid_counter)
         new_diff = bitcoin_data.target_to_difficulty(self.target)*self.wb.net.DUMB_SCRYPT_DIFF
-        # FR-1.15 quirk #3: only emit set_difficulty when the diff
-        # actually changed; emitting it on every notify (when diff is
-        # unchanged) wastes a wire message and increases the chance of
-        # the simultaneous-arrival race that corrupts the miner's
+        # FR-1.15 quirk #3 (DISPUTED): only emit set_difficulty when the
+        # diff actually changed; emitting it on every notify (when diff
+        # is unchanged) wastes a wire message and increases the chance
+        # of the simultaneous-arrival race that corrupts the miner's
         # internal target.  When diff DOES change, we still issue
         # set_difficulty before notify on the same TCP socket — the
         # ordering is preserved by Twisted's serialized writes.
-        if new_diff != self._last_sent_diff:
+        # 2026-05-04 update: 5-min asic_simulator captures vs kr1z1s SPB
+        # + Rostov + ours (env-var ON) show kr1z1s emits set_diff 100%
+        # of the time and retains FR-1.15; we dedupe to ~36% and don't
+        # retain.  STRATUM_SET_DIFF_EVERY_NOTIFY=1 disables the dedupe
+        # to match kr1z1s wire shape exactly — see env-var docs above.
+        if SET_DIFF_EVERY_NOTIFY or new_diff != self._last_sent_diff:
             self._trace('-->', 'set_difficulty', diff='%.4g' % new_diff)
             self.other.svc_mining.rpc_set_difficulty(new_diff).addErrback(lambda err: None)
             self._last_sent_diff = new_diff
