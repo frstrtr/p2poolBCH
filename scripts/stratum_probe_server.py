@@ -158,9 +158,11 @@ class StratumProbeServer:
         self._results_csv_fields = [
             "timestamp", "cid",
             "hypothesis_idx", "hypothesis_name", "hypothesis_expect",
-            "configure_seen", "subscribe_seen", "authorize_seen", "submits",
+            "configure_seen", "subscribe_seen", "authorize_seen",
+            "submits", "submits_our",
             "duration_sec", "terminated_by",
-            "first_submit_ms", "first_share_accepted",
+            "first_submit_ms", "first_submit_our_ms",
+            "first_share_accepted",
         ]
 
         if self.rotate_enabled:
@@ -300,6 +302,13 @@ class StratumProbeServer:
             "subscribe_seen": False,
             "authorize_seen": False,
             "submits": 0,
+            # submits_our: only those submits whose job_id is one we
+            # sent in mining.notify on THIS connection. Anything else is
+            # a chip-flush of nonces queued from the miner's previous
+            # pool — still useful to log, but not a vote that this
+            # hypothesis works.
+            "submits_our": 0,
+            "our_job_ids": set(),
             "first_share_accepted": None,
             "version_rolling_negotiated": False,
             "negotiated_mask": None,
@@ -311,6 +320,7 @@ class StratumProbeServer:
             "hyp_tags": hyp_tags,
             "conn_start": time.time(),
             "first_submit_ts": None,
+            "first_submit_our_ts": None,
             "terminated_by": None,
             "rotation_consumed": (hyp_idx is not None),
         }
@@ -389,8 +399,12 @@ class StratumProbeServer:
                 await writer.wait_closed()
             except Exception:
                 pass
-            self.log(cid, "==", "CONNECTION CLOSED — submits=%d configure=%s subscribe=%s authorize=%s" %
-                     (state["submits"], state["configure_seen"], state["subscribe_seen"],
+            self.log(cid, "==",
+                     "CONNECTION CLOSED — submits=%d (our=%d, stale=%d) "
+                     "configure=%s subscribe=%s authorize=%s" %
+                     (state["submits"], state["submits_our"],
+                      state["submits"] - state["submits_our"],
+                      state["configure_seen"], state["subscribe_seen"],
                       state["authorize_seen"]), "32")
             if state.get("rotation_consumed"):
                 # Engagement gate: only count this as a real cycle if the
@@ -400,7 +414,23 @@ class StratumProbeServer:
                 # index — they leave the slot for the next real miner.
                 if state["subscribe_seen"]:
                     self._record_completion(cid, state)
-                    self._advance_hypothesis()
+                    # Serialize advancement: when several parallel S21+
+                    # connections all bind to the same hypothesis idx
+                    # (e.g. one TCP per chip) and close at roughly the
+                    # same time, only the FIRST close advances the
+                    # cursor. Later closes still record results — but
+                    # don't bump idx again, otherwise rotation would
+                    # skip 2 hypotheses per round of parallel conns.
+                    if state["hyp_idx"] == self.rotate_idx:
+                        self._advance_hypothesis()
+                    else:
+                        self.log(cid, "==",
+                                 "ROTATION ABSORBED: name=%s hyp_idx=%d "
+                                 "but cursor already at %d/%d "
+                                 "(parallel-conn deduplication)" %
+                                 (state["hyp_name"], state["hyp_idx"],
+                                  self.rotate_idx, len(self.matrix)),
+                                 "1;35")
                 else:
                     self.log(cid, "==",
                              "HYPOTHESIS NOT-CONSUMED: name=%s "
@@ -501,8 +531,18 @@ class StratumProbeServer:
         state["submits"] += 1
         if state["first_submit_ts"] is None:
             state["first_submit_ts"] = time.time()
+        # Stratum mining.submit params order: [worker, job_id, en2, ntime, nonce, ...]
+        sub_job_id = params[1] if len(params) > 1 else None
+        is_our_job = sub_job_id is not None and sub_job_id in state["our_job_ids"]
+        if is_our_job:
+            state["submits_our"] += 1
+            if state["first_submit_our_ts"] is None:
+                state["first_submit_our_ts"] = time.time()
+        origin = "OUR" if is_our_job else "STALE"
         self.log(cid, "==",
-                 "MILESTONE: SUBMIT #%d params=%s" % (state["submits"], params), "32")
+                 "MILESTONE: SUBMIT #%d (%s job=%s our=%d) params=%s" %
+                 (state["submits"], origin, sub_job_id,
+                  state["submits_our"], params), "32")
         if state["args"].reject_shares:
             await self.send(cid, state, {"id": msg_id, "result": False,
                                          "error": [23, "Low difficulty share", None]})
@@ -536,6 +576,7 @@ class StratumProbeServer:
     async def push_notify(self, cid, state, clean_jobs):
         self.job_seq += 1
         job_id = "%x" % self.job_seq
+        state["our_job_ids"].add(job_id)
         prevhash = "00" * 32
         en1_bytes = len(state["args"].extranonce1) // 2
         scriptsig_len = en1_bytes + state["args"].extranonce2_size  # must be < 253
@@ -595,12 +636,18 @@ class StratumProbeServer:
             while state["alive"]:
                 now = time.time()
                 # Success-path early-exit: enough submits collected.
+                # Gate on submits_our (our-job-id-matched), not the raw
+                # total — chip-flush stale-nonce floods can otherwise
+                # trigger early-exit and contaminate the verdict for a
+                # hypothesis that, against our work, would have been silent.
                 if ("silent" not in tags
                         and "expects_reject" not in tags
                         and min_submits > 0
-                        and state["submits"] >= min_submits):
+                        and state["submits_our"] >= min_submits):
                     state["terminated_by"] = "our_close_min_submits"
-                    self._close_for_rotation(cid, state, "min_submits reached (%d)" % min_submits)
+                    self._close_for_rotation(cid, state,
+                                             "min_submits_our reached (%d, total=%d)" %
+                                             (state["submits_our"], state["submits"]))
                     return
                 if now >= deadline:
                     state["terminated_by"] = term_label
@@ -624,6 +671,8 @@ class StratumProbeServer:
         dur = time.time() - state["conn_start"]
         first_ms = (None if state["first_submit_ts"] is None
                     else int((state["first_submit_ts"] - state["conn_start"]) * 1000))
+        first_our_ms = (None if state["first_submit_our_ts"] is None
+                        else int((state["first_submit_our_ts"] - state["conn_start"]) * 1000))
         row = OrderedDict([
             ("timestamp", time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())),
             ("cid", cid),
@@ -634,9 +683,11 @@ class StratumProbeServer:
             ("subscribe_seen", int(state["subscribe_seen"])),
             ("authorize_seen", int(state["authorize_seen"])),
             ("submits", state["submits"]),
+            ("submits_our", state["submits_our"]),
             ("duration_sec", "%.2f" % dur),
             ("terminated_by", state["terminated_by"] or "unknown"),
             ("first_submit_ms", "" if first_ms is None else first_ms),
+            ("first_submit_our_ms", "" if first_our_ms is None else first_our_ms),
             ("first_share_accepted",
              "" if state["first_share_accepted"] is None
              else int(bool(state["first_share_accepted"]))),
@@ -648,8 +699,8 @@ class StratumProbeServer:
             ni = (self.rotate_idx + 1) % len(self.matrix)
             next_label = self.matrix[ni]["name"]
         self.log(cid, "==",
-                 "HYPOTHESIS RESULT: name=%s submits=%d dur=%.1fs term=%s next=%s" %
-                 (state["hyp_name"], state["submits"], dur,
+                 "HYPOTHESIS RESULT: name=%s submits=%d our=%d dur=%.1fs term=%s next=%s" %
+                 (state["hyp_name"], state["submits"], state["submits_our"], dur,
                   state["terminated_by"] or "unknown", next_label), "1;35")
         if self.results_csv_writer:
             self.results_csv_writer.writerow(row)
@@ -659,14 +710,16 @@ class StratumProbeServer:
             return
         # Aggregate by hypothesis name across all cycles seen so far.
         agg = defaultdict(lambda: {
-            "cycles": 0, "submits_total": 0, "configure": 0, "subscribe": 0,
-            "authorize": 0, "peer_close": 0, "server_close": 0,
-            "had_first_share_accept": 0,
+            "cycles": 0, "submits_total": 0, "submits_our_total": 0,
+            "configure": 0, "subscribe": 0, "authorize": 0,
+            "peer_close": 0, "server_close": 0,
+            "cycles_with_our_submit": 0,
         })
         for row in self.results:
             a = agg[row["hypothesis_name"]]
             a["cycles"] += 1
             a["submits_total"] += int(row["submits"])
+            a["submits_our_total"] += int(row.get("submits_our", 0) or 0)
             a["configure"] += int(row["configure_seen"])
             a["subscribe"] += int(row["subscribe_seen"])
             a["authorize"] += int(row["authorize_seen"])
@@ -675,27 +728,31 @@ class StratumProbeServer:
                 a["peer_close"] += 1
             elif term.startswith("our_"):
                 a["server_close"] += 1
-            if row["first_share_accepted"] in (1, "1"):
-                a["had_first_share_accept"] += 1
+            if int(row.get("submits_our", 0) or 0) > 0:
+                a["cycles_with_our_submit"] += 1
 
         print("[%s] === ROTATION SUMMARY (%d total cycles, %d distinct hypotheses) ===" %
               (now_ts(), len(self.results), len(agg)), flush=True)
         # Header
-        print("  %-26s  %5s  %4s  %4s  %4s  %5s  %4s  %4s" %
-              ("hypothesis", "cyc", "cfg", "sub", "auth", "subm",
-               "psh", "ssh"), flush=True)
+        print("  %-26s  %5s  %4s  %4s  %4s  %6s  %5s  %4s  %4s  %4s" %
+              ("hypothesis", "cyc", "cfg", "sub", "auth",
+               "subm", "our", "wonc", "psh", "ssh"), flush=True)
         # Preserve matrix order for printing.
         ordered_names = [h["name"] for h in self.matrix]
         for name in ordered_names + [n for n in agg if n not in ordered_names]:
             if name not in agg:
                 continue
             a = agg[name]
-            print("  %-26s  %5d  %4d  %4d  %4d  %5d  %4d  %4d" %
+            print("  %-26s  %5d  %4d  %4d  %4d  %6d  %5d  %4d  %4d  %4d" %
                   (name, a["cycles"], a["configure"], a["subscribe"],
-                   a["authorize"], a["submits_total"],
+                   a["authorize"], a["submits_total"], a["submits_our_total"],
+                   a["cycles_with_our_submit"],
                    a["peer_close"], a["server_close"]), flush=True)
         print("  legend: cyc=cycles cfg=configure-seen sub=subscribe-seen "
-              "auth=authorize-seen subm=total-submits psh=peer-close ssh=server-close",
+              "auth=authorize-seen subm=total-submits-incl-stale "
+              "our=our-job-id-matched-submits "
+              "wonc=cycles-with-at-least-1-our-submit "
+              "psh=peer-close ssh=server-close",
               flush=True)
 
 
