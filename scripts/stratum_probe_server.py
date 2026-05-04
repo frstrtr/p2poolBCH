@@ -233,6 +233,17 @@ class StratumProbeServer:
             print("[%s] ROTATE: full pass complete (%d hypotheses); not looping" %
                   (now_ts(), len(self.matrix)), flush=True)
             self.print_summary()
+            if self.args.rotate_exit_after_pass:
+                print("[%s] ROTATE: --rotate-exit-after-pass set; "
+                      "stopping reactor in 3s to let in-flight logs flush" %
+                      now_ts(), flush=True)
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.call_later(3.0, loop.stop)
+                except RuntimeError:
+                    # No running loop — fall back to hard exit
+                    import os as _os
+                    _os._exit(0)
 
     def log(self, cid, direction, msg, color=None):
         line = "[%s] [conn-%d] %s %s" % (now_ts(), cid, direction, msg)
@@ -435,7 +446,10 @@ class StratumProbeServer:
         await self.send(cid, state, {"id": msg_id, "result": result, "error": None})
 
     async def on_subscribe(self, cid, state, msg_id, params):
-        state["subscribe_seen"] = True
+        # Note: do NOT set subscribe_seen=True yet — UA filter still pending.
+        # If we set it before the UA check, a rejected UA would still
+        # advance the rotation index (engagement-gate counts subscribe_seen
+        # as 'engaged').  Set subscribe_seen=True AFTER the UA filter passes.
         miner_ua = params[0] if params else "?"
         if self.require_ua_re and not self.require_ua_re.search(str(miner_ua)):
             self.log(cid, "==",
@@ -449,6 +463,7 @@ class StratumProbeServer:
             except Exception:
                 pass
             return
+        state["subscribe_seen"] = True
         if state["args"].subscribe_form == "nested":
             subs = [
                 ["mining.set_difficulty", "b4b6693b72a50c7116db18d6497cac52"],
@@ -743,6 +758,10 @@ async def main():
     p.add_argument("--rotate-min-submits", type=int, default=5,
                    help="for success-path hypotheses, close after this many "
                         "submits if reached before --rotate-success-window")
+    p.add_argument("--rotate-exit-after-pass", action="store_true",
+                   help="exit the probe cleanly after one full matrix pass "
+                        "and the end-of-pass summary (mutually useful with "
+                        "no --rotate-loop, for finite captures)")
     p.add_argument("--results-csv", default=None,
                    help="append one row per completed hypothesis cycle to "
                         "this CSV (created if missing, headers written then)")
