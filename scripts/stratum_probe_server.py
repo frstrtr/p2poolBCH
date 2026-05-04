@@ -235,14 +235,21 @@ class StratumProbeServer:
             self.print_summary()
             if self.args.rotate_exit_after_pass:
                 print("[%s] ROTATE: --rotate-exit-after-pass set; "
-                      "stopping reactor in 3s to let in-flight logs flush" %
+                      "exiting in 3s to let in-flight logs flush" %
                       now_ts(), flush=True)
+                # asyncio.run() raises if the loop is stop()ped from under it,
+                # so we just os._exit(0) instead. By this point the summary
+                # has printed and the CSV has been flushed (csv writer in
+                # _record_result calls fp.flush() per row), so a hard exit
+                # loses nothing.
+                import os as _os
+                import sys as _sys
+                _sys.stdout.flush()
+                _sys.stderr.flush()
                 try:
                     loop = asyncio.get_running_loop()
-                    loop.call_later(3.0, loop.stop)
+                    loop.call_later(3.0, lambda: _os._exit(0))
                 except RuntimeError:
-                    # No running loop — fall back to hard exit
-                    import os as _os
                     _os._exit(0)
 
     def log(self, cid, direction, msg, color=None):
