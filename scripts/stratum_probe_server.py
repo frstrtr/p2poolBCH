@@ -375,8 +375,21 @@ class StratumProbeServer:
                      (state["submits"], state["configure_seen"], state["subscribe_seen"],
                       state["authorize_seen"]), "32")
             if state.get("rotation_consumed"):
-                self._record_completion(cid, state)
-                self._advance_hypothesis()
+                # Engagement gate: only count this as a real cycle if the
+                # connection at least reached mining.subscribe.  Bare TCP
+                # connects, port scanners, half-open NAT probes, and
+                # malformed clients should NOT advance the rotation
+                # index — they leave the slot for the next real miner.
+                if state["subscribe_seen"]:
+                    self._record_completion(cid, state)
+                    self._advance_hypothesis()
+                else:
+                    self.log(cid, "==",
+                             "HYPOTHESIS NOT-CONSUMED: name=%s "
+                             "(connection ended before mining.subscribe; "
+                             "rotation index unchanged at %d/%d)" %
+                             (state["hyp_name"], self.rotate_idx,
+                              len(self.matrix)), "35")
 
     async def send(self, cid, state, obj):
         if not state["alive"]:
