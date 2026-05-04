@@ -249,9 +249,21 @@ class StratumProbeServer:
         cid = self.conn_seq
         peer = writer.get_extra_info("peername")
 
+        # Skip rotation for loopback peers (typically dashboard pollers
+        # hitting /local_stats every few seconds — they don't speak
+        # stratum but they DO consume hypothesis slots if not filtered).
+        peer_host = peer[0] if peer else ""
+        is_loopback = peer_host in ("127.0.0.1", "::1", "localhost")
+
         # Bind a hypothesis to this connection.  When rotation is off, the
         # effective args are simply the baseline.
-        hyp_idx, hyp = self._next_hypothesis()
+        if is_loopback and self.rotate_enabled:
+            # Don't consume a rotation slot for loopback pollers.  Serve
+            # them with the baseline args (which is what they'd hit on
+            # real p2pool anyway) and don't track them in the matrix.
+            hyp_idx, hyp = (None, None)
+        else:
+            hyp_idx, hyp = self._next_hypothesis()
         if hyp is not None:
             eff_args = _apply_overrides(self.args, hyp.get("overrides", {}))
             hyp_name = hyp["name"]
@@ -259,7 +271,7 @@ class StratumProbeServer:
             hyp_tags = list(hyp.get("tags", []))
         else:
             eff_args = self.args
-            hyp_name = "(no-rotate)"
+            hyp_name = "(loopback-bypass)" if is_loopback else "(no-rotate)"
             hyp_expect = "n/a"
             hyp_tags = []
 
