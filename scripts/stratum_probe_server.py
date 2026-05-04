@@ -40,11 +40,14 @@ OUTPUT
 
 import argparse
 import asyncio
+import copy
+import csv
 import json
 import os
 import re
 import sys
 import time
+from collections import OrderedDict, defaultdict
 
 ANSI = sys.stdout.isatty()
 def C(code, s):
@@ -55,6 +58,85 @@ def now_ts():
     return time.strftime("%H:%M:%S", time.localtime(t)) + ".%03d" % int((t % 1) * 1000)
 
 
+# Default rotating-hypothesis matrix.  Each entry tests one wire-shape
+# parameter against FR-1.15-class firmware (Antminer S21+ stock,
+# bmminer-derived).  See memory/reference_bmminer_stratum_contract.md
+# for the source-code-derived expectations behind each row.
+#
+# `expect` values:
+#   works              — handshake completes, miner submits shares
+#   reject_subscribe   — miner closes before/at subscribe response
+#   reject_configure   — miner closes during/after configure
+#   silent_drop        — miner stays connected but eventually times out
+#   maybe              — uncertain (test to find out)
+#
+# `tags`:
+#   silent             — completion uses --rotate-silent-window timer
+#   expects_reject     — completion uses short-reject window (30s)
+#
+# Anything else uses the success-window / min-submits criterion.
+DEFAULT_MATRIX = [
+    {"name": "baseline",                "overrides": {},
+     "expect": "works",            "tags": []},
+
+    # extranonce2_size sweep — bmminer hard-rejects outside [2,16]
+    {"name": "n2size_2",                "overrides": {"extranonce2_size": 2},
+     "expect": "works",            "tags": []},
+    {"name": "n2size_4",                "overrides": {"extranonce2_size": 4},
+     "expect": "works",            "tags": []},
+    {"name": "n2size_8",                "overrides": {"extranonce2_size": 8},
+     "expect": "works",            "tags": []},
+    {"name": "n2size_16",               "overrides": {"extranonce2_size": 16},
+     "expect": "works",            "tags": []},
+    {"name": "n2size_1",                "overrides": {"extranonce2_size": 1},
+     "expect": "reject_subscribe", "tags": ["expects_reject"]},
+    {"name": "n2size_17",               "overrides": {"extranonce2_size": 17},
+     "expect": "reject_subscribe", "tags": ["expects_reject"]},
+    {"name": "n2size_32",               "overrides": {"extranonce2_size": 32},
+     "expect": "reject_subscribe", "tags": ["expects_reject"]},
+
+    # version-rolling mask sweep — BM1368 chip rolls bits [13:28]
+    {"name": "mask_1fffe000",           "overrides": {"version_mask": "1fffe000"},
+     "expect": "works",            "tags": []},
+    {"name": "mask_18000000",           "overrides": {"version_mask": "18000000"},
+     "expect": "maybe",            "tags": []},
+    {"name": "mask_00800000",           "overrides": {"version_mask": "00800000"},
+     "expect": "reject_configure", "tags": ["expects_reject"]},
+    {"name": "mask_00000000",           "overrides": {"version_mask": "00000000"},
+     "expect": "reject_configure", "tags": ["expects_reject"]},
+
+    # subscribe response form
+    {"name": "subscribe_flat",          "overrides": {"subscribe_form": "flat"},
+     "expect": "works",            "tags": []},
+    {"name": "subscribe_nested",        "overrides": {"subscribe_form": "nested"},
+     "expect": "works",            "tags": []},
+
+    # keepalive cadence
+    {"name": "keepalive_120",           "overrides": {"keepalive_interval": 120.0},
+     "expect": "works",            "tags": []},
+    {"name": "keepalive_0",             "overrides": {"keepalive_interval": 0.0},
+     "expect": "works",            "tags": []},
+
+    # silent server — no notifies after subscribe; miner times out at ~300s
+    {"name": "silent_after_subscribe",  "overrides": {"silent_after_subscribe": True},
+     "expect": "silent_drop",      "tags": ["silent"]},
+
+    # mid-session set_version_mask push behaviour
+    {"name": "nopush_set_version_mask", "overrides": {"push_set_version_mask": False},
+     "expect": "works",            "tags": []},
+    {"name": "push_set_version_mask",   "overrides": {"push_set_version_mask": True},
+     "expect": "works",            "tags": []},
+]
+
+
+def _apply_overrides(base_args, overrides):
+    """Return a shallow copy of an argparse.Namespace with overrides applied."""
+    ns = argparse.Namespace(**vars(base_args))
+    for k, v in overrides.items():
+        setattr(ns, k, v)
+    return ns
+
+
 class StratumProbeServer:
     def __init__(self, args):
         self.args = args
@@ -63,6 +145,94 @@ class StratumProbeServer:
         self.capture = open(args.capture, "ab", buffering=0) if args.capture else None
         self.require_ua_re = (re.compile(args.require_ua_pattern, re.IGNORECASE)
                               if args.require_ua_pattern else None)
+
+        # ---- Rotation state ------------------------------------------------
+        self.rotate_enabled = bool(args.rotate)
+        self.matrix = []
+        self.rotate_idx = 0
+        self.completed_passes = 0
+        self.results = []  # list of dicts, one per completed cycle
+        self.results_csv_path = args.results_csv
+        self.results_csv_fh = None
+        self.results_csv_writer = None
+        self._results_csv_fields = [
+            "timestamp", "cid",
+            "hypothesis_idx", "hypothesis_name", "hypothesis_expect",
+            "configure_seen", "subscribe_seen", "authorize_seen", "submits",
+            "duration_sec", "terminated_by",
+            "first_submit_ms", "first_share_accepted",
+        ]
+
+        if self.rotate_enabled:
+            self.matrix = self._load_matrix(args.rotate_file)
+            if not self.matrix:
+                print("[%s] ROTATE: empty matrix; rotation disabled" % now_ts(), flush=True)
+                self.rotate_enabled = False
+            else:
+                if args.start_at:
+                    names = [h["name"] for h in self.matrix]
+                    if args.start_at not in names:
+                        raise SystemExit("--start-at: %r not in matrix; available: %s" %
+                                         (args.start_at, names))
+                    self.rotate_idx = names.index(args.start_at)
+                if self.results_csv_path:
+                    fresh = not os.path.exists(self.results_csv_path)
+                    self.results_csv_fh = open(self.results_csv_path, "a",
+                                               newline="", buffering=1)
+                    self.results_csv_writer = csv.DictWriter(
+                        self.results_csv_fh, fieldnames=self._results_csv_fields)
+                    if fresh:
+                        self.results_csv_writer.writeheader()
+                self._announce_matrix()
+
+    @staticmethod
+    def _load_matrix(path):
+        if not path:
+            return [dict(h) for h in DEFAULT_MATRIX]
+        with open(path) as f:
+            data = json.load(f)
+        if not isinstance(data, list):
+            raise SystemExit("--rotate-file: top level must be a JSON list")
+        for h in data:
+            if "name" not in h or "overrides" not in h:
+                raise SystemExit("--rotate-file: each entry needs 'name' and 'overrides'")
+            h.setdefault("expect", "maybe")
+            h.setdefault("tags", [])
+        return data
+
+    def _announce_matrix(self):
+        print("[%s] ROTATE: %d hypotheses, starting at idx=%d (%s); loop=%s" % (
+            now_ts(), len(self.matrix), self.rotate_idx,
+            self.matrix[self.rotate_idx]["name"], self.args.rotate_loop), flush=True)
+        for i, h in enumerate(self.matrix):
+            mark = "->" if i == self.rotate_idx else "  "
+            print("  %s %2d. %-26s expect=%-18s overrides=%s" % (
+                mark, i, h["name"], h["expect"], h["overrides"]), flush=True)
+
+    def _next_hypothesis(self):
+        """Return (idx, hypothesis_dict) for the current rotation slot, or
+        (None, None) if rotation has finished and --rotate-loop is off."""
+        if not self.rotate_enabled:
+            return (None, None)
+        if self.rotate_idx >= len(self.matrix):
+            if self.args.rotate_loop:
+                self.completed_passes += 1
+                self.rotate_idx = 0
+            else:
+                return (None, None)
+        h = self.matrix[self.rotate_idx]
+        return (self.rotate_idx, h)
+
+    def _advance_hypothesis(self):
+        if not self.rotate_enabled:
+            return
+        self.rotate_idx += 1
+        # If we've consumed the last entry and --rotate-loop is off, mark
+        # rotation finished so subsequent connections fall back to baseline.
+        if self.rotate_idx >= len(self.matrix) and not self.args.rotate_loop:
+            print("[%s] ROTATE: full pass complete (%d hypotheses); not looping" %
+                  (now_ts(), len(self.matrix)), flush=True)
+            self.print_summary()
 
     def log(self, cid, direction, msg, color=None):
         line = "[%s] [conn-%d] %s %s" % (now_ts(), cid, direction, msg)
@@ -78,6 +248,21 @@ class StratumProbeServer:
         self.conn_seq += 1
         cid = self.conn_seq
         peer = writer.get_extra_info("peername")
+
+        # Bind a hypothesis to this connection.  When rotation is off, the
+        # effective args are simply the baseline.
+        hyp_idx, hyp = self._next_hypothesis()
+        if hyp is not None:
+            eff_args = _apply_overrides(self.args, hyp.get("overrides", {}))
+            hyp_name = hyp["name"]
+            hyp_expect = hyp.get("expect", "maybe")
+            hyp_tags = list(hyp.get("tags", []))
+        else:
+            eff_args = self.args
+            hyp_name = "(no-rotate)"
+            hyp_expect = "n/a"
+            hyp_tags = []
+
         state = {
             "writer": writer,
             "alive": True,
@@ -85,23 +270,45 @@ class StratumProbeServer:
             "subscribe_seen": False,
             "authorize_seen": False,
             "submits": 0,
+            "first_share_accepted": None,
             "version_rolling_negotiated": False,
             "negotiated_mask": None,
             "first_notify_sent": False,
+            "args": eff_args,
+            "hyp_idx": hyp_idx,
+            "hyp_name": hyp_name,
+            "hyp_expect": hyp_expect,
+            "hyp_tags": hyp_tags,
+            "conn_start": time.time(),
+            "first_submit_ts": None,
+            "terminated_by": None,
+            "rotation_consumed": (hyp_idx is not None),
         }
         self.log(cid, "==", "NEW CONNECTION from %s" % (peer,), "32")
+        if hyp_idx is not None:
+            self.log(cid, "==",
+                     "HYPOTHESIS START: idx=%d/%d name=%s expect=%s overrides=%s" %
+                     (hyp_idx, len(self.matrix), hyp_name, hyp_expect,
+                      hyp.get("overrides", {})), "1;35")
 
         ka_task = None
         notify_task = None
+        hyp_task = None
+        if hyp_idx is not None:
+            hyp_task = asyncio.create_task(self.hypothesis_monitor(cid, state))
         try:
             while True:
                 try:
                     line = await reader.readline()
                 except (ConnectionError, asyncio.IncompleteReadError) as e:
                     self.log(cid, "!!", "read error: %s" % e, "31")
+                    if state["terminated_by"] is None:
+                        state["terminated_by"] = "peer_error"
                     break
                 if not line:
                     self.log(cid, "==", "EOF (peer closed)", "33")
+                    if state["terminated_by"] is None:
+                        state["terminated_by"] = "peer_eof"
                     break
                 raw = line.decode("utf-8", errors="replace").rstrip()
                 if not raw:
@@ -124,9 +331,9 @@ class StratumProbeServer:
                     await self.on_subscribe(cid, state, msg_id, params)
                 elif method == "mining.authorize":
                     await self.on_authorize(cid, state, msg_id, params)
-                    if notify_task is None and not self.args.silent_after_subscribe:
+                    if notify_task is None and not state["args"].silent_after_subscribe:
                         notify_task = asyncio.create_task(self.notify_loop(cid, state))
-                    if ka_task is None and self.args.keepalive_interval > 0:
+                    if ka_task is None and state["args"].keepalive_interval > 0:
                         ka_task = asyncio.create_task(self.keepalive_loop(cid, state))
                 elif method == "mining.submit":
                     await self.on_submit(cid, state, msg_id, params)
@@ -144,7 +351,7 @@ class StratumProbeServer:
                                                      "error": [20, "Unknown method", None]})
         finally:
             state["alive"] = False
-            for t in (ka_task, notify_task):
+            for t in (ka_task, notify_task, hyp_task):
                 if t and not t.done():
                     t.cancel()
             try:
@@ -155,6 +362,9 @@ class StratumProbeServer:
             self.log(cid, "==", "CONNECTION CLOSED — submits=%d configure=%s subscribe=%s authorize=%s" %
                      (state["submits"], state["configure_seen"], state["subscribe_seen"],
                       state["authorize_seen"]), "32")
+            if state.get("rotation_consumed"):
+                self._record_completion(cid, state)
+                self._advance_hypothesis()
 
     async def send(self, cid, state, obj):
         if not state["alive"]:
@@ -176,14 +386,14 @@ class StratumProbeServer:
         ext_params = params[1] if len(params) > 1 else {}
         result = {}
         if "version-rolling" in extensions:
-            if self.args.no_version_rolling:
+            if state["args"].no_version_rolling:
                 result["version-rolling"] = False
                 self.log(cid, "==",
                          "MILESTONE: configure — version-rolling DECLINED (--no-version-rolling)",
                          "32")
             else:
                 miner_mask_hex = ext_params.get("version-rolling.mask", "ffffffff")
-                pool_mask = int(self.args.version_mask, 16)
+                pool_mask = int(state["args"].version_mask, 16)
                 miner_mask = int(miner_mask_hex, 16)
                 negotiated = pool_mask & miner_mask
                 state["version_rolling_negotiated"] = True
@@ -193,7 +403,7 @@ class StratumProbeServer:
                 self.log(cid, "==",
                          "MILESTONE: configure — version-rolling AGREED "
                          "miner=%s pool=%s negotiated=%08x" %
-                         (miner_mask_hex, self.args.version_mask, negotiated), "32")
+                         (miner_mask_hex, state["args"].version_mask, negotiated), "32")
         for other in extensions:
             if other != "version-rolling" and other not in result:
                 result[other] = False
@@ -214,20 +424,20 @@ class StratumProbeServer:
             except Exception:
                 pass
             return
-        if self.args.subscribe_form == "nested":
+        if state["args"].subscribe_form == "nested":
             subs = [
                 ["mining.set_difficulty", "b4b6693b72a50c7116db18d6497cac52"],
                 ["mining.notify",         "ae6812eb4cd7735a302a8a9dd95cf71f"],
             ]
         else:
             subs = ["mining.notify", "ae6812eb4cd7735a302a8a9dd95cf71f"]
-        result = [subs, self.args.extranonce1, self.args.extranonce2_size]
+        result = [subs, state["args"].extranonce1, state["args"].extranonce2_size]
         self.log(cid, "==",
                  "MILESTONE: subscribe — UA=%r form=%s en1=%s en2_size=%d" %
-                 (miner_ua, self.args.subscribe_form, self.args.extranonce1,
-                  self.args.extranonce2_size), "32")
+                 (miner_ua, state["args"].subscribe_form, state["args"].extranonce1,
+                  state["args"].extranonce2_size), "32")
         await self.send(cid, state, {"id": msg_id, "result": result, "error": None})
-        if self.args.push_set_version_mask and state["version_rolling_negotiated"]:
+        if state["args"].push_set_version_mask and state["version_rolling_negotiated"]:
             mask_hex = "%08x" % state["negotiated_mask"]
             await self.send(cid, state, {"id": None,
                                          "method": "mining.set_version_mask",
@@ -242,23 +452,29 @@ class StratumProbeServer:
 
     async def on_submit(self, cid, state, msg_id, params):
         state["submits"] += 1
+        if state["first_submit_ts"] is None:
+            state["first_submit_ts"] = time.time()
         self.log(cid, "==",
                  "MILESTONE: SUBMIT #%d params=%s" % (state["submits"], params), "32")
-        if self.args.reject_shares:
+        if state["args"].reject_shares:
             await self.send(cid, state, {"id": msg_id, "result": False,
                                          "error": [23, "Low difficulty share", None]})
+            if state["first_share_accepted"] is None:
+                state["first_share_accepted"] = False
         else:
             await self.send(cid, state, {"id": msg_id, "result": True, "error": None})
+            if state["first_share_accepted"] is None:
+                state["first_share_accepted"] = True
 
     async def notify_loop(self, cid, state):
         try:
-            await asyncio.sleep(self.args.first_notify_delay)
+            await asyncio.sleep(state["args"].first_notify_delay)
             await self.push_set_difficulty(cid, state)
             await self.push_notify(cid, state, clean_jobs=True)
             state["first_notify_sent"] = True
-            if self.args.notify_interval > 0:
+            if state["args"].notify_interval > 0:
                 while state["alive"]:
-                    await asyncio.sleep(self.args.notify_interval)
+                    await asyncio.sleep(state["args"].notify_interval)
                     if not state["alive"]:
                         return
                     await self.push_notify(cid, state, clean_jobs=False)
@@ -268,14 +484,14 @@ class StratumProbeServer:
     async def push_set_difficulty(self, cid, state):
         await self.send(cid, state, {"id": None,
                                      "method": "mining.set_difficulty",
-                                     "params": [self.args.difficulty]})
+                                     "params": [state["args"].difficulty]})
 
     async def push_notify(self, cid, state, clean_jobs):
         self.job_seq += 1
         job_id = "%x" % self.job_seq
         prevhash = "00" * 32
-        en1_bytes = len(self.args.extranonce1) // 2
-        scriptsig_len = en1_bytes + self.args.extranonce2_size  # must be < 253
+        en1_bytes = len(state["args"].extranonce1) // 2
+        scriptsig_len = en1_bytes + state["args"].extranonce2_size  # must be < 253
         coinb1 = ("01000000"                                  # tx version
                   "01"                                        # input count
                   "00" * 32 +                                 # prev txid
@@ -297,7 +513,7 @@ class StratumProbeServer:
     async def keepalive_loop(self, cid, state):
         try:
             while state["alive"]:
-                await asyncio.sleep(self.args.keepalive_interval)
+                await asyncio.sleep(state["args"].keepalive_interval)
                 if not state["alive"]:
                     return
                 await self.send(cid, state, {"id": int(time.time()),
@@ -305,6 +521,135 @@ class StratumProbeServer:
                                              "params": []})
         except asyncio.CancelledError:
             return
+
+    # ------------------------------------------------------------------
+    # Rotation: hypothesis monitor, completion recording, summary
+    # ------------------------------------------------------------------
+
+    async def hypothesis_monitor(self, cid, state):
+        """Decide when this connection's hypothesis is 'complete' and close
+        our side of the socket so the miner reconnects → next hypothesis."""
+        try:
+            tags = state["hyp_tags"]
+            args = self.args  # rotation timings come from the SERVER args, not eff_args
+            if "silent" in tags:
+                window = args.rotate_silent_window
+                term_label = "our_close_silent_window"
+            elif "expects_reject" in tags:
+                window = args.rotate_reject_window
+                term_label = "our_close_reject_window"
+            else:
+                window = args.rotate_success_window
+                term_label = "our_close_after_window"
+
+            min_submits = args.rotate_min_submits
+
+            deadline = state["conn_start"] + window
+            while state["alive"]:
+                now = time.time()
+                # Success-path early-exit: enough submits collected.
+                if ("silent" not in tags
+                        and "expects_reject" not in tags
+                        and min_submits > 0
+                        and state["submits"] >= min_submits):
+                    state["terminated_by"] = "our_close_min_submits"
+                    self._close_for_rotation(cid, state, "min_submits reached (%d)" % min_submits)
+                    return
+                if now >= deadline:
+                    state["terminated_by"] = term_label
+                    self._close_for_rotation(cid, state, "window=%.0fs elapsed" % window)
+                    return
+                await asyncio.sleep(min(0.5, deadline - now))
+        except asyncio.CancelledError:
+            return
+
+    def _close_for_rotation(self, cid, state, reason):
+        self.log(cid, "==",
+                 "HYPOTHESIS COMPLETE (server-close): name=%s reason=%s submits=%d" %
+                 (state["hyp_name"], reason, state["submits"]), "1;35")
+        state["alive"] = False
+        try:
+            state["writer"].close()
+        except Exception:
+            pass
+
+    def _record_completion(self, cid, state):
+        dur = time.time() - state["conn_start"]
+        first_ms = (None if state["first_submit_ts"] is None
+                    else int((state["first_submit_ts"] - state["conn_start"]) * 1000))
+        row = OrderedDict([
+            ("timestamp", time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())),
+            ("cid", cid),
+            ("hypothesis_idx", state["hyp_idx"]),
+            ("hypothesis_name", state["hyp_name"]),
+            ("hypothesis_expect", state["hyp_expect"]),
+            ("configure_seen", int(state["configure_seen"])),
+            ("subscribe_seen", int(state["subscribe_seen"])),
+            ("authorize_seen", int(state["authorize_seen"])),
+            ("submits", state["submits"]),
+            ("duration_sec", "%.2f" % dur),
+            ("terminated_by", state["terminated_by"] or "unknown"),
+            ("first_submit_ms", "" if first_ms is None else first_ms),
+            ("first_share_accepted",
+             "" if state["first_share_accepted"] is None
+             else int(bool(state["first_share_accepted"]))),
+        ])
+        self.results.append(row)
+        # Compute "next" hypothesis for the log line.
+        next_label = "(end)"
+        if self.args.rotate_loop or (self.rotate_idx + 1) < len(self.matrix):
+            ni = (self.rotate_idx + 1) % len(self.matrix)
+            next_label = self.matrix[ni]["name"]
+        self.log(cid, "==",
+                 "HYPOTHESIS RESULT: name=%s submits=%d dur=%.1fs term=%s next=%s" %
+                 (state["hyp_name"], state["submits"], dur,
+                  state["terminated_by"] or "unknown", next_label), "1;35")
+        if self.results_csv_writer:
+            self.results_csv_writer.writerow(row)
+
+    def print_summary(self):
+        if not self.results:
+            return
+        # Aggregate by hypothesis name across all cycles seen so far.
+        agg = defaultdict(lambda: {
+            "cycles": 0, "submits_total": 0, "configure": 0, "subscribe": 0,
+            "authorize": 0, "peer_close": 0, "server_close": 0,
+            "had_first_share_accept": 0,
+        })
+        for row in self.results:
+            a = agg[row["hypothesis_name"]]
+            a["cycles"] += 1
+            a["submits_total"] += int(row["submits"])
+            a["configure"] += int(row["configure_seen"])
+            a["subscribe"] += int(row["subscribe_seen"])
+            a["authorize"] += int(row["authorize_seen"])
+            term = row["terminated_by"] or ""
+            if term.startswith("peer_"):
+                a["peer_close"] += 1
+            elif term.startswith("our_"):
+                a["server_close"] += 1
+            if row["first_share_accepted"] in (1, "1"):
+                a["had_first_share_accept"] += 1
+
+        print("[%s] === ROTATION SUMMARY (%d total cycles, %d distinct hypotheses) ===" %
+              (now_ts(), len(self.results), len(agg)), flush=True)
+        # Header
+        print("  %-26s  %5s  %4s  %4s  %4s  %5s  %4s  %4s" %
+              ("hypothesis", "cyc", "cfg", "sub", "auth", "subm",
+               "psh", "ssh"), flush=True)
+        # Preserve matrix order for printing.
+        ordered_names = [h["name"] for h in self.matrix]
+        for name in ordered_names + [n for n in agg if n not in ordered_names]:
+            if name not in agg:
+                continue
+            a = agg[name]
+            print("  %-26s  %5d  %4d  %4d  %4d  %5d  %4d  %4d" %
+                  (name, a["cycles"], a["configure"], a["subscribe"],
+                   a["authorize"], a["submits_total"],
+                   a["peer_close"], a["server_close"]), flush=True)
+        print("  legend: cyc=cycles cfg=configure-seen sub=subscribe-seen "
+              "auth=authorize-seen subm=total-submits psh=peer-close ssh=server-close",
+              flush=True)
 
 
 async def main():
@@ -345,6 +690,37 @@ async def main():
                         "this case-insensitive regex; e.g. 'antminer.*s21' or "
                         "'bmminer.*s21' to fence the probe to S21+ only and stop "
                         "stray miners from parking hashrate here")
+    # ---- Rotating-hypothesis mode --------------------------------------
+    p.add_argument("--rotate", action="store_true",
+                   help="enable rotating-hypothesis mode: each new TCP "
+                        "connection gets the next hypothesis from the matrix; "
+                        "the probe closes our side once a completion criterion "
+                        "is met so the miner reconnects and rolls to the next.")
+    p.add_argument("--rotate-file", default=None,
+                   help="JSON file with custom hypothesis matrix (list of "
+                        "{name, overrides, expect, tags}); defaults to the "
+                        "built-in 19-row matrix when --rotate is on.")
+    p.add_argument("--start-at", default=None,
+                   help="skip ahead to this hypothesis name on first connection")
+    p.add_argument("--rotate-loop", action="store_true",
+                   help="cycle the matrix forever; default is one full pass "
+                        "then stop scheduling new hypotheses (existing "
+                        "connections continue)")
+    p.add_argument("--rotate-success-window", type=float, default=60.0,
+                   help="seconds to keep a 'works'-class hypothesis open "
+                        "before closing our side (success path)")
+    p.add_argument("--rotate-silent-window", type=float, default=320.0,
+                   help="seconds to keep a 'silent_*'-tagged hypothesis open; "
+                        "slightly past the FR-1.15 300s drop")
+    p.add_argument("--rotate-reject-window", type=float, default=30.0,
+                   help="hard cap for 'expects_reject'-tagged hypotheses if "
+                        "the miner doesn't close on its own first")
+    p.add_argument("--rotate-min-submits", type=int, default=5,
+                   help="for success-path hypotheses, close after this many "
+                        "submits if reached before --rotate-success-window")
+    p.add_argument("--results-csv", default=None,
+                   help="append one row per completed hypothesis cycle to "
+                        "this CSV (created if missing, headers written then)")
     args = p.parse_args()
 
     server = StratumProbeServer(args)
