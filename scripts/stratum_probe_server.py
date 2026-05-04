@@ -580,16 +580,28 @@ class StratumProbeServer:
         prevhash = "00" * 32
         en1_bytes = len(state["args"].extranonce1) // 2
         scriptsig_len = en1_bytes + state["args"].extranonce2_size  # must be < 253
-        coinb1 = ("01000000"                                  # tx version
-                  "01"                                        # input count
-                  "00" * 32 +                                 # prev txid
-                  "ffffffff" +                                # prev vout
-                  "%02x" % scriptsig_len)                     # scriptSig length varint
-        coinb2 = ("ffffffff"                                  # sequence
-                  "01"                                        # output count
-                  "00f2052a01000000"                          # value (50 BTC)
-                  "1976a914" + "00" * 20 + "88ac"             # P2PKH to all-zeros
-                  "00000000")                                 # locktime
+        # IMPORTANT: explicit `+` between every fragment.  Python concatenates
+        # adjacent string literals at parse time BEFORE `*` applies, so a
+        # bareword chain like
+        #     "01000000" "01" "00" * 32 + ...
+        # parses as ("010000000100") * 32 — 192 garbage bytes — NOT what
+        # you want for the prev_txid field.  This bug shipped a malformed
+        # coinbase tx for the entire 2026-05-04 wire-shape probe matrix
+        # and explains why FR-1.15 firmware accepted the handshake but
+        # silently refused to mine: it validates coinbase structure, saw
+        # garbage where prev_txid should be, declined to submit.
+        coinb1 = ("01000000"                                # tx version (LE int32)
+                  + "01"                                    # input count varint
+                  + "00" * 32                               # prev txid (32 zero bytes — coinbase)
+                  + "ffffffff"                              # prev vout
+                  + ("%02x" % scriptsig_len))               # scriptSig length varint
+        coinb2 = ("ffffffff"                                # input sequence
+                  + "01"                                    # output count varint
+                  + "00f2052a01000000"                      # value (50 BTC LE)
+                  + "1976a914"                              # OP_DUP OP_HASH160 push20
+                  + "00" * 20                               # 20-byte P2PKH addr (zeros)
+                  + "88ac"                                  # OP_EQUALVERIFY OP_CHECKSIG
+                  + "00000000")                             # locktime
         merkle = []
         version = "20000000"
         nbits = "1d00ffff"
