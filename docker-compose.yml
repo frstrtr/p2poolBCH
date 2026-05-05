@@ -56,6 +56,21 @@ services:
     #   NODE_NAME:          my-p2pool
     #   P2POOL_EXTRA_ARGS:  --give-author 0    # zero upstream donations
     #
+    # ── FR-1.15 diff experiment ────────────────────────────────────────────
+    # FR-1.15 firmware (Antminer S21+ stock) produces ~28-30% rejects with
+    # miss=1.31x average, independent of share age.  Hypothesis: it uses a
+    # different difficulty→target formula, effectively mining against a
+    # ~1.31x softer target than we validate against.
+    # Test: reduce initial diff by /1.39 ≈ 47000 so our target matches theirs.
+    # If rejects drop to ~0%, the formula mismatch is confirmed.
+    #   STRATUM_FIXED_INITIAL_DIFF: "47000"
+    #
+    # ── Reject forensics ──────────────────────────────────────────────────
+    #   STRATUM_REJECT_DUMP_PATH:          "/p2pool/data/reject_dump.jsonl"
+    #   STRATUM_REJECT_DUMP_WORKER_PREFIX: "s21p"
+    #   STRATUM_REJECT_ALT_PATHS_LOG:      "1"
+    #   STRATUM_REJECT_DUMP_LIMIT:         "5000"
+    #
     # Telegram bot — direct env vars (alternative to /etc/p2pool-bot.env).
     # Any of BOT_TOKEN, BOT_PROXY, BOT_PROXY_GET_UPDATES, BROADCAST_CHANNEL_ID
     # set here propagate to the bot subprocess.  Use BOT_PROXY to route
