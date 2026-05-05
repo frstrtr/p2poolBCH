@@ -276,10 +276,18 @@ def _parse_u32_from_submit_hex(h, hex_is_le):
 
 def _format_alt_rows(rows):
     parts = []
+    prev_err = None
     for row in rows:
         if row.get('err'):
-            parts.append('%s:ERR' % row['label'])
+            err_msg = row['err']
+            # Deduplicate identical consecutive errors to keep the line readable
+            if err_msg == prev_err:
+                parts.append('%s:ERR(same)' % row['label'])
+            else:
+                parts.append('%s:ERR(%s)' % (row['label'], err_msg))
+                prev_err = err_msg
         else:
+            prev_err = None
             parts.append('%s:%.3fx%s' % (
                 row['label'], row['miss'], ' OK' if row.get('would_accept') else ''))
     return '; '.join(parts)
