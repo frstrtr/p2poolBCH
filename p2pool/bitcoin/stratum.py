@@ -986,7 +986,8 @@ class StratumRPCMiningProvider(object):
                 alt_accept_paths = []
                 alt_has_zero_reject_path = False
 
-            if _diag_within_budget and ((not REJECT_DUMP_WORKER_PREFIX) or worker_name.startswith(REJECT_DUMP_WORKER_PREFIX)):
+            _worker_short = worker_name.rsplit('.', 1)[-1]
+            if _diag_within_budget and ((not REJECT_DUMP_WORKER_PREFIX) or _worker_short.startswith(REJECT_DUMP_WORKER_PREFIX)):
                 try:
                     peer = self.transport.getPeer()
                     peer_ip = getattr(peer, 'host', '?')
