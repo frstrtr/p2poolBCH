@@ -68,6 +68,12 @@ services:
     #   STRATUM_SENT_DIFF_MULT: "2.0"
     #   STRATUM_FIXED_INITIAL_DIFF: "65536"
     #
+    # Per-UA sent-diff multiplier (preferred over the global SENT_DIFF_MULT):
+    # comma-separated "substring:mult" rules, case-insensitive, first match
+    # wins.  The UA is what the miner sends in mining.subscribe param[0].
+    # Check STRATUM_TRACE logs for "subscribe ua=..." to find exact strings.
+    #   STRATUM_SENT_DIFF_MULT_UA: "antminer s21+:2.0,antminer s21 hyd:1.0"
+    #
     # ── Reject forensics ──────────────────────────────────────────────────
     #   STRATUM_REJECT_DUMP_PATH:          "/p2pool/data/reject_dump.jsonl"
     #   STRATUM_REJECT_DUMP_WORKER_PREFIX: "s21p"

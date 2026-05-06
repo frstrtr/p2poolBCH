@@ -216,6 +216,26 @@ REJECT_DUMP_LIMIT    = int(_envfloat('STRATUM_REJECT_DUMP_LIMIT', 1000))
 # unchanged.  Start with 2.0 (safe for max miss ≤ 1.94x observed),
 # then tune down.  Default 1.0 = no scaling (legacy behaviour).
 SENT_DIFF_MULT       = _envfloat('STRATUM_SENT_DIFF_MULT', 1.0)
+# Per-UA sent-diff multiplier: overrides SENT_DIFF_MULT for connections
+# whose mining.subscribe user-agent contains a matching substring.
+# Format: STRATUM_SENT_DIFF_MULT_UA="pattern1:mult1,pattern2:mult2"
+# Example: STRATUM_SENT_DIFF_MULT_UA="Antminer S21+:2.0,Antminer S21 Hyd:1.0"
+# Matching is case-insensitive substring.  First match wins.  Connections
+# with no matching UA fall back to SENT_DIFF_MULT.
+def _parse_sent_diff_mult_ua(envval):
+    result = []
+    for item in envval.split(','):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            pattern, mult_str = item.rsplit(':', 1)
+            result.append((pattern.strip().lower(), float(mult_str.strip())))
+        except (ValueError, TypeError):
+            print 'STRATUM: ignoring malformed STRATUM_SENT_DIFF_MULT_UA entry: %r' % item
+    return result
+_SENT_DIFF_MULT_UA_RAW = os.environ.get('STRATUM_SENT_DIFF_MULT_UA', '').strip()
+SENT_DIFF_MULT_UA    = _parse_sent_diff_mult_ua(_SENT_DIFF_MULT_UA_RAW)
 # Module-level counter; list-wrapped so closures can mutate it.
 _reject_diag_count = [0]
 # Vardiff per-ratchet clip factor.  The vardiff multiplier is computed as
@@ -271,6 +291,10 @@ else:
     print 'STRATUM: vardiff per-ratchet clip = (0.100, 10.000) (default; matches LTC+DOGE merged-v36)'
 if SENT_DIFF_MULT != 1.0:
     print 'STRATUM: sent set_difficulty multiplier = %.4g via STRATUM_SENT_DIFF_MULT (fixes chip DIFF1 mismatch)' % SENT_DIFF_MULT
+if SENT_DIFF_MULT_UA:
+    print 'STRATUM: per-UA sent-diff multiplier rules (%d) via STRATUM_SENT_DIFF_MULT_UA:' % len(SENT_DIFF_MULT_UA)
+    for _pat, _mul in SENT_DIFF_MULT_UA:
+        print '  "%s" -> %.4gx' % (_pat, _mul)
 
 def _ts():
     t = time.time()
@@ -373,6 +397,12 @@ class StratumRPCMiningProvider(object):
             self._extranonce1 = os.urandom(n)
         else:
             self._extranonce1 = b''
+        # Per-connection UA string (set in rpc_subscribe) and the
+        # effective sent-diff multiplier resolved from SENT_DIFF_MULT_UA
+        # (or SENT_DIFF_MULT if no UA rule matches).  _conn_sent_diff_mult
+        # is used in _send_work instead of the global SENT_DIFF_MULT.
+        self.miner_ua = None
+        self._conn_sent_diff_mult = SENT_DIFF_MULT
 
     def _trace(self, direction, method, **fields):
         if not TRACE:
@@ -387,7 +417,17 @@ class StratumRPCMiningProvider(object):
             ' ' if parts else '', parts)
 
     def rpc_subscribe(self, miner_version=None, session_id=None, *args):
+        self.miner_ua = miner_version or ''
+        # Resolve per-connection sent-diff multiplier from UA patterns.
+        # First matching rule wins; fall back to global SENT_DIFF_MULT.
+        if SENT_DIFF_MULT_UA:
+            ua_lower = self.miner_ua.lower()
+            for pattern, mult in SENT_DIFF_MULT_UA:
+                if pattern in ua_lower:
+                    self._conn_sent_diff_mult = mult
+                    break
         self._trace('<--', 'subscribe', ua=repr(miner_version),
+                    mult='%.4gx' % self._conn_sent_diff_mult,
                     form=('nested' if NICEHASH_COMPAT else 'flat'))
         # Skip the subscribe-time send_work when STRATUM_NOTIFY_AFTER_AUTH is
         # set; rpc_authorize will fire send_work after the full handshake
@@ -691,7 +731,7 @@ class StratumRPCMiningProvider(object):
         # DIFF1 constant (e.g. S21+ FR-1.15 stock).  Only the wire
         # value is scaled; self.target (the accepted pool target) is
         # unchanged.  See STRATUM_SENT_DIFF_MULT docs above.
-        sent_diff = new_diff * SENT_DIFF_MULT
+        sent_diff = new_diff * self._conn_sent_diff_mult
         # FR-1.15 quirk #3 (DISPUTED): only emit set_difficulty when the
         # diff actually changed; emitting it on every notify (when diff
         # is unchanged) wastes a wire message and increases the chance
