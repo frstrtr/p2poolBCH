@@ -198,6 +198,24 @@ REJECT_ALT_PATHS_LOG = _envflag('STRATUM_REJECT_ALT_PATHS_LOG')
 # active productive window at 30 rejects/min, sufficient to catch the
 # pattern without flooding logs or filling /p2pool/data.
 REJECT_DUMP_LIMIT    = int(_envfloat('STRATUM_REJECT_DUMP_LIMIT', 1000))
+# Sent-difficulty scale multiplier for miners whose firmware uses a
+# non-standard DIFF1 constant (e.g. Antminer S21+ FR-1.15 stock).
+# Root cause: the miner's chip calibrates its internal target as
+#   chip_target = DIFF1_firmware / set_difficulty
+# If DIFF1_firmware != DIFF1_p2pool, chip_target differs from pool
+# pool_target by factor R = DIFF1_firmware/DIFF1_p2pool.  When R > 1
+# the chip mines at an easier target → some submitted shares exceed
+# pool_target → rejects.  Evidence: reject_dump.jsonl (2026-05-06)
+# shows consistent miss ratio 1.0–2.0x for S21+ FR-1.15, max 1.94x.
+# Fix: send set_difficulty * SENT_DIFF_MULT so the chip calibrates
+# chip_target = DIFF1_firmware / (D * R) = DIFF1_firmware/(D*R).
+# For R = DIFF1_firmware/DIFF1_p2pool: chip_target = pool_target. ✓
+# The pool's *accepted* target (self.target) is NOT changed — only the
+# number sent in the wire set_difficulty message is scaled.  Vardiff
+# converges to the same equilibrium because accepted share rate is
+# unchanged.  Start with 2.0 (safe for max miss ≤ 1.94x observed),
+# then tune down.  Default 1.0 = no scaling (legacy behaviour).
+SENT_DIFF_MULT       = _envfloat('STRATUM_SENT_DIFF_MULT', 1.0)
 # Module-level counter; list-wrapped so closures can mutate it.
 _reject_diag_count = [0]
 # Vardiff per-ratchet clip factor.  The vardiff multiplier is computed as
@@ -251,6 +269,8 @@ if VARDIFF_CLIP != 10.0:
     print 'STRATUM: vardiff per-ratchet clip = (%.3f, %.3f) via STRATUM_VARDIFF_CLIP=%.3f' % (1.0/VARDIFF_CLIP, VARDIFF_CLIP, VARDIFF_CLIP)
 else:
     print 'STRATUM: vardiff per-ratchet clip = (0.100, 10.000) (default; matches LTC+DOGE merged-v36)'
+if SENT_DIFF_MULT != 1.0:
+    print 'STRATUM: sent set_difficulty multiplier = %.4g via STRATUM_SENT_DIFF_MULT (fixes chip DIFF1 mismatch)' % SENT_DIFF_MULT
 
 def _ts():
     t = time.time()
@@ -667,6 +687,11 @@ class StratumRPCMiningProvider(object):
         self._jobid_counter = (self._jobid_counter + 1) % (2**32)
         jobid = str(self._jobid_counter)
         new_diff = bitcoin_data.target_to_difficulty(self.target)*self.wb.net.DUMB_SCRYPT_DIFF
+        # Apply sent-diff scale correction for miners with non-standard
+        # DIFF1 constant (e.g. S21+ FR-1.15 stock).  Only the wire
+        # value is scaled; self.target (the accepted pool target) is
+        # unchanged.  See STRATUM_SENT_DIFF_MULT docs above.
+        sent_diff = new_diff * SENT_DIFF_MULT
         # FR-1.15 quirk #3 (DISPUTED): only emit set_difficulty when the
         # diff actually changed; emitting it on every notify (when diff
         # is unchanged) wastes a wire message and increases the chance
@@ -679,10 +704,10 @@ class StratumRPCMiningProvider(object):
         # of the time and retains FR-1.15; we dedupe to ~36% and don't
         # retain.  STRATUM_SET_DIFF_EVERY_NOTIFY=1 disables the dedupe
         # to match kr1z1s wire shape exactly — see env-var docs above.
-        if SET_DIFF_EVERY_NOTIFY or new_diff != self._last_sent_diff:
-            self._trace('-->', 'set_difficulty', diff='%.4g' % new_diff)
-            self.other.svc_mining.rpc_set_difficulty(new_diff).addErrback(lambda err: None)
-            self._last_sent_diff = new_diff
+        if SET_DIFF_EVERY_NOTIFY or sent_diff != self._last_sent_diff:
+            self._trace('-->', 'set_difficulty', diff='%.4g' % sent_diff)
+            self.other.svc_mining.rpc_set_difficulty(sent_diff).addErrback(lambda err: None)
+            self._last_sent_diff = sent_diff
         self._trace('-->', 'notify', jobid=jobid, clean=True)
         # Hex encoding of the 4-byte fields version/nbits/ntime: legacy
         # default is BE (LE pack + _swap4 = BE bytes); STRATUM_NOTIFY_HEX_LE
