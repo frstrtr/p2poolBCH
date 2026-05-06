@@ -58,12 +58,15 @@ services:
     #
     # ── FR-1.15 diff experiment ────────────────────────────────────────────
     # FR-1.15 firmware (Antminer S21+ stock) produces ~28-30% rejects with
-    # miss=1.31x average, independent of share age.  Hypothesis: it uses a
-    # different difficulty→target formula, effectively mining against a
-    # ~1.31x softer target than we validate against.
-    # Test: reduce initial diff by /1.39 ≈ 47000 so our target matches theirs.
-    # If rejects drop to ~0%, the formula mismatch is confirmed.
-    #   STRATUM_FIXED_INITIAL_DIFF: "47000"
+    # miss=1.31x average (max 1.94x), independent of share age.
+    # Root cause confirmed (reject_dump.jsonl 2026-05-06): the firmware's
+    # chip uses a different DIFF1 constant, so chip_target ≈ 2x pool_target.
+    # Fix: STRATUM_SENT_DIFF_MULT multiplies the wire set_difficulty value
+    # without changing the pool's accepted target (self.target).  Start with
+    # 2.0 (guaranteed safe for max miss ≤ 1.94x), tune down toward 1.5 once
+    # confirmed.  s21Hyd has 0 rejects so this fix must be model-specific.
+    #   STRATUM_SENT_DIFF_MULT: "2.0"
+    #   STRATUM_FIXED_INITIAL_DIFF: "65536"
     #
     # ── Reject forensics ──────────────────────────────────────────────────
     #   STRATUM_REJECT_DUMP_PATH:          "/p2pool/data/reject_dump.jsonl"
